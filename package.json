@@ -4,12 +4,17 @@
   "description": "Offline desktop AI assistant powered by Ollama, with subject-scoped memory",
   "main": "src/main.js",
   "scripts": {
-    "start": "electron ."
+    "start": "electron .",
+    "build:css": "tailwindcss -i src/renderer/input.css -o src/renderer/output.css"
   },
   "dependencies": {
     "better-sqlite3": "^11.10.0"
   },
   "devDependencies": {
-    "electron": "^31.3.1"
+    "@electron/rebuild": "^4.2.0",
+    "@tailwindcss/cli": "^4.3.3",
+    "daisyui": "^5.7.13",
+    "electron": "^31.3.1",
+    "tailwindcss": "^4.3.3"
   }
 }

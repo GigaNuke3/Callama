@@ -1,85 +1,171 @@
 <!DOCTYPE html>
-<html>
+<html lang="en" data-theme="callama">
 <head>
 <meta charset="UTF-8" />
-<title>Callama (test harness)</title>
-<style>
-  :root { color-scheme: dark; }
-  body {
-    margin: 0; font-family: -apple-system, "Segoe UI", sans-serif;
-    background: #16161a; color: #e6e6e6; display: flex; height: 100vh;
-  }
-  aside {
-    width: 170px; border-right: 1px solid #2a2a30; padding: 12px; flex-shrink: 0;
-  }
-  aside h2 { font-size: 12px; text-transform: uppercase; color: #888; margin: 0 0 8px; }
-  .subject {
-    padding: 8px 10px; border-radius: 6px; cursor: pointer; font-size: 14px; margin-bottom: 4px;
-  }
-  .subject.active { background: #3a3a45; }
-  main { flex: 1; display: flex; flex-direction: column; }
-  #history { flex: 1; overflow-y: auto; padding: 20px; }
-  .msg { margin-bottom: 16px; max-width: 70%; padding: 10px 14px; border-radius: 10px; line-height: 1.4; }
-  .msg.user { background: #2f5d8a; margin-left: auto; }
-  .msg.assistant { background: #26262e; }
-  form { display: flex; gap: 8px; padding: 16px; border-top: 1px solid #2a2a30; }
-  input[type=text] {
-    flex: 1; padding: 10px 12px; border-radius: 8px; border: 1px solid #333; background: #1e1e24; color: #eee;
-  }
-  select, button { padding: 8px 10px; border-radius: 8px; border: 1px solid #333; background: #1e1e24; color: #eee; }
-  button { cursor: pointer; }
-</style>
+<title>Callama</title>
+<link rel="stylesheet" href="output.css" />
 </head>
-<body>
-  <aside>
-    <h2>Subject</h2>
-    <div id="subjects"></div>
-    <h2 style="margin-top:16px">Model</h2>
-    <select id="model"></select>
-  </aside>
-  <main>
-    <div id="history"></div>
-    <form id="form">
-      <input id="input" type="text" placeholder="Ask something..." autocomplete="off" />
-      <button type="submit">Send</button>
-    </form>
-  </main>
+<body class="bg-base-100 text-base-content">
+  <div class="flex h-screen overflow-hidden">
+
+    <aside class="w-60 shrink-0 border-r border-base-300 flex flex-col p-4 gap-6 overflow-y-auto">
+      <div>
+        <h1 class="font-display text-base tracking-wide">callama</h1>
+        <p class="text-[11px] text-base-content/45 mt-0.5">offline &middot; subject-scoped</p>
+      </div>
+
+      <nav class="flex flex-col gap-4">
+        <button
+          class="subject-btn btn btn-sm justify-start font-display normal-case"
+          data-subject="predictability"
+        >predictability</button>
+
+        <div class="subject-link flex flex-col gap-1.5 pl-3">
+            <button class="subject-btn btn btn-sm btn-ghost justify-start font-display normal-case" data-subject="health">health</button>
+            <button class="subject-btn btn btn-sm btn-ghost justify-start font-display normal-case" data-subject="wellbeing">wellbeing</button>
+            </div>
+
+            <div class="subject-link flex flex-col gap-1.5 pl-3">
+            <button class="subject-btn btn btn-sm btn-ghost justify-start font-display normal-case" data-subject="education">education</button>
+            <button class="subject-btn btn btn-sm btn-ghost justify-start font-display normal-case" data-subject="logicalthinking">logicalthinking</button>
+            </div>
+      </nav>
+
+      <div class="mt-auto flex flex-col gap-3">
+        <div>
+          <label class="text-[10px] font-display uppercase tracking-widest text-base-content/40">model</label>
+          <select id="model" class="select select-sm select-bordered w-full mt-1"></select>
+        </div>
+        <div>
+          <label class="text-[10px] font-display uppercase tracking-widest text-base-content/40">
+            temperature <span id="temp-val" class="text-base-content/70">0.7</span>
+          </label>
+          <input id="temperature" type="range" min="0" max="1" step="0.1" value="0.7"
+                 class="range range-xs range-primary mt-2" />
+        </div>
+      </div>
+    </aside>
+
+    <main class="flex-1 flex flex-col min-w-0">
+      <header class="border-b border-base-300 px-6 py-3 shrink-0">
+        <h2 id="subject-title" class="font-display text-sm uppercase tracking-wide text-primary"></h2>
+        <p id="subject-desc" class="text-[12px] text-base-content/50 mt-0.5"></p>
+      </header>
+
+      <div id="history" class="flex-1 overflow-y-auto px-6 py-5 flex flex-col"></div>
+
+      <form id="form" class="border-t border-base-300 p-3 flex gap-2 items-end shrink-0">
+        <textarea
+          id="input"
+          rows="1"
+          class="textarea textarea-bordered flex-1 resize-none leading-relaxed"
+          placeholder="Ask something..."
+        ></textarea>
+        <button type="submit" class="btn btn-primary font-display normal-case">send</button>
+      </form>
+    </main>
+
+  </div>
 
 <script>
-const SUBJECTS = ['predictability', 'health', 'education', 'wellbeing', 'logicalthinking'];
-let activeSubject = 'predictability';
-let streamingEl = null;
+const SUBJECTS = {
+  predictability: { label: 'predictability', desc: 'Day-to-day questions. Default context — reads across all four subjects below.' },
+  health:         { label: 'health',         desc: 'Physical & mental health questions. Linked with wellbeing.' },
+  wellbeing:      { label: 'wellbeing',       desc: 'Mental health, philosophy, focusing on yourself. Linked with health.' },
+  education:      { label: 'education',       desc: 'Creative writing & general knowledge. Linked with logicalthinking.' },
+  logicalthinking:{ label: 'logicalthinking', desc: 'Code, math, engineering. Linked with education.' },
+};
 
-const subjectsEl = document.getElementById('subjects');
+let activeSubject = 'predictability';
+let streamingBubble = null;
+
 const historyEl = document.getElementById('history');
 const formEl = document.getElementById('form');
 const inputEl = document.getElementById('input');
 const modelEl = document.getElementById('model');
+const tempEl = document.getElementById('temperature');
+const tempValEl = document.getElementById('temp-val');
+const titleEl = document.getElementById('subject-title');
+const descEl = document.getElementById('subject-desc');
 
-function renderSubjectList() {
-  subjectsEl.innerHTML = '';
-  for (const s of SUBJECTS) {
-    const div = document.createElement('div');
-    div.className = 'subject' + (s === activeSubject ? ' active' : '');
-    div.textContent = s;
-    div.onclick = () => { activeSubject = s; renderSubjectList(); loadHistory(); };
-    subjectsEl.appendChild(div);
-  }
+tempEl.addEventListener('input', () => { tempValEl.textContent = tempEl.value; });
+
+function setActiveSubject(subject) {
+  activeSubject = subject;
+  document.querySelectorAll('.subject-btn').forEach((btn) => {
+    const isActive = btn.dataset.subject === subject;
+    btn.classList.toggle('btn-primary', isActive);
+    btn.classList.toggle('btn-ghost', !isActive);
+  });
+  titleEl.textContent = SUBJECTS[subject].label;
+  descEl.textContent = SUBJECTS[subject].desc;
+  loadHistory();
 }
 
-function addMessageEl(role, content) {
-  const div = document.createElement('div');
-  div.className = 'msg ' + role;
-  div.textContent = content;
-  historyEl.appendChild(div);
-  historyEl.scrollTop = historyEl.scrollHeight;
-  return div;
+document.querySelectorAll('.subject-btn').forEach((btn) => {
+  btn.addEventListener('click', () => setActiveSubject(btn.dataset.subject));
+});
+
+function bubble(row) {
+  const isUser = row.role === 'user';
+  const wrap = document.createElement('div');
+  wrap.className = `chat ${isUser ? 'chat-end' : 'chat-start'} group`;
+
+  const content = document.createElement('div');
+  content.className = `chat-bubble ${isUser ? 'chat-bubble-primary' : ''} whitespace-pre-wrap`;
+  content.textContent = row.content;
+  wrap.appendChild(content);
+
+  if (isUser && row.id) {
+    const footer = document.createElement('div');
+    footer.className = 'chat-footer opacity-0 group-hover:opacity-100 text-[11px] text-base-content/40 cursor-pointer mt-0.5 transition-opacity';
+    footer.textContent = row.edited_at ? 'edited · click to edit again' : 'edit';
+    footer.addEventListener('click', () => startEdit(wrap, content, row));
+    wrap.appendChild(footer);
+  }
+
+  return wrap;
+}
+
+function startEdit(wrap, contentEl, row) {
+  const textarea = document.createElement('textarea');
+  textarea.className = 'textarea textarea-bordered textarea-sm w-80 whitespace-pre-wrap';
+  textarea.value = row.content;
+  contentEl.replaceWith(textarea);
+  textarea.focus();
+
+  const commit = async () => {
+    const newContent = textarea.value.trim();
+    if (!newContent || newContent === row.content) { loadHistory(); return; }
+    while (wrap.nextSibling) wrap.nextSibling.remove();
+    textarea.replaceWith(bubbleContentOnly(newContent));
+    await window.callama.edit({
+      subject: activeSubject,
+      id: row.id,
+      content: newContent,
+      model: modelEl.value,
+      temperature: parseFloat(tempEl.value),
+    });
+  };
+
+  textarea.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); commit(); }
+  });
+  textarea.addEventListener('blur', commit);
+}
+
+function bubbleContentOnly(text) {
+  const el = document.createElement('div');
+  el.className = 'chat-bubble chat-bubble-primary whitespace-pre-wrap';
+  el.textContent = text;
+  return el;
 }
 
 async function loadHistory() {
   historyEl.innerHTML = '';
   const rows = await window.callama.getHistory(activeSubject);
-  for (const row of rows) addMessageEl(row.role, row.content);
+  for (const row of rows) historyEl.appendChild(bubble(row));
+  historyEl.scrollTop = historyEl.scrollHeight;
 }
 
 async function loadModels() {
@@ -87,36 +173,48 @@ async function loadModels() {
     const models = await window.callama.listModels();
     modelEl.innerHTML = models.map((m) => `<option value="${m}">${m}</option>`).join('');
   } catch (e) {
-    modelEl.innerHTML = '<option value="llama3.2:3b">llama3.2:3b (Ollama not reachable)</option>';
+    modelEl.innerHTML = '<option value="llama3.2:3b">llama3.2:3b (offline)</option>';
   }
 }
 
 window.callama.onChunk(({ subject, delta }) => {
   if (subject !== activeSubject) return;
-  if (!streamingEl) streamingEl = addMessageEl('assistant', '');
-  streamingEl.textContent += delta;
+  if (!streamingBubble) {
+    const wrap = document.createElement('div');
+    wrap.className = 'chat chat-start';
+    streamingBubble = document.createElement('div');
+    streamingBubble.className = 'chat-bubble whitespace-pre-wrap';
+    wrap.appendChild(streamingBubble);
+    historyEl.appendChild(wrap);
+  }
+  streamingBubble.textContent += delta;
   historyEl.scrollTop = historyEl.scrollHeight;
 });
 
-window.callama.onDone(() => { streamingEl = null; });
+window.callama.onDone(() => { streamingBubble = null; });
 
 formEl.addEventListener('submit', async (e) => {
   e.preventDefault();
   const content = inputEl.value.trim();
   if (!content) return;
   inputEl.value = '';
-  addMessageEl('user', content);
+  historyEl.appendChild(bubble({ role: 'user', content, id: null }));
+  historyEl.scrollTop = historyEl.scrollHeight;
   await window.callama.send({
     subject: activeSubject,
     content,
     model: modelEl.value,
-    temperature: 0.7,
+    temperature: parseFloat(tempEl.value),
   });
+  loadHistory();
 });
 
-renderSubjectList();
+inputEl.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); formEl.requestSubmit(); }
+});
+
+setActiveSubject('predictability');
 loadModels();
-loadHistory();
 </script>
 </body>
 </html>
