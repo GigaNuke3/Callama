@@ -1,8 +1,4 @@
-<<<<<<< HEAD
-lear# Callama
-=======
 # Callama
->>>>>>> origin/main
 
 To Start Project:
 
