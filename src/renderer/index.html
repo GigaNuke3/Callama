@@ -4,6 +4,7 @@
 <meta charset="UTF-8" />
 <title>Callama</title>
 <link rel="stylesheet" href="output.css" />
+<script src="marked.umd.js"></script>
 </head>
 <body class="bg-base-100 text-base-content">
   <div class="flex h-screen overflow-hidden">
@@ -97,6 +98,7 @@ const SUBJECT_TEMPERATURE = {
 let chats = [];
 let activeChatId = null;
 let streamingBubble = null;
+let streamingRaw = '';
 
 const chatListEl = document.getElementById('chat-list');
 const newChatBtn = document.getElementById('new-chat-btn');
@@ -225,8 +227,12 @@ function bubble(row) {
   wrap.className = `chat ${isUser ? 'chat-end' : 'chat-start'} group`;
 
   const content = document.createElement('div');
-  content.className = `chat-bubble ${isUser ? 'chat-bubble-primary' : ''} whitespace-pre-wrap`;
-  content.textContent = row.content;
+  content.className = `chat-bubble ${isUser ? 'chat-bubble-primary' : ''} ${isUser ? 'whitespace-pre-wrap' : 'markdown-content'}`;
+  if (isUser) {
+    content.textContent = row.content;
+  } else {
+    content.innerHTML = marked.parse(row.content);
+  }
   wrap.appendChild(content);
 
   if (isUser && row.id) {
@@ -298,16 +304,19 @@ window.callama.onChunk(({ chatId, delta }) => {
     const wrap = document.createElement('div');
     wrap.className = 'chat chat-start';
     streamingBubble = document.createElement('div');
-    streamingBubble.className = 'chat-bubble whitespace-pre-wrap';
+    streamingBubble.className = 'chat-bubble markdown-content';
     wrap.appendChild(streamingBubble);
     historyEl.appendChild(wrap);
+    streamingRaw = '';
   }
-  streamingBubble.textContent += delta;
+  streamingRaw += delta;
+  streamingBubble.innerHTML = marked.parse(streamingRaw);
   historyEl.scrollTop = historyEl.scrollHeight;
 });
 
 window.callama.onDone(async () => {
   streamingBubble = null;
+  streamingRaw = '';
   await refreshChatList();
 });
 

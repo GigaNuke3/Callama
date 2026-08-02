@@ -45,3 +45,44 @@ body {
 .subject-link {
   position: relative;
 }
+
+/* Styling for marked.js output inside assistant chat bubbles */
+.markdown-content p { margin: 0 0 0.6em; }
+.markdown-content p:last-child { margin-bottom: 0; }
+.markdown-content ul, .markdown-content ol { margin: 0.4em 0 0.6em 1.2em; }
+.markdown-content ul { list-style: disc; }
+.markdown-content ol { list-style: decimal; }
+.markdown-content li { margin: 0.15em 0; }
+.markdown-content h1, .markdown-content h2, .markdown-content h3 {
+  font-family: "CallamaMono", ui-monospace, monospace;
+  font-weight: 600;
+  margin: 0.7em 0 0.35em;
+}
+.markdown-content h1 { font-size: 1.05em; }
+.markdown-content h2 { font-size: 1em; }
+.markdown-content h3 { font-size: 0.95em; }
+.markdown-content strong { font-weight: 700; }
+.markdown-content em { font-style: italic; }
+.markdown-content code {
+  font-family: "CallamaMono", ui-monospace, monospace;
+  font-size: 0.9em;
+  background: var(--color-base-300);
+  padding: 0.1em 0.35em;
+  border-radius: 0.3em;
+}
+.markdown-content pre {
+  background: var(--color-base-300);
+  padding: 0.6em 0.8em;
+  border-radius: 0.5em;
+  overflow-x: auto;
+  margin: 0.5em 0;
+}
+.markdown-content pre code { background: none; padding: 0; }
+.markdown-content a { text-decoration: underline; }
+.markdown-content blockquote {
+  border-left: 2px solid var(--color-base-300);
+  padding-left: 0.7em;
+  margin: 0.5em 0;
+  color: var(--color-base-content);
+  opacity: 0.75;
+}
