@@ -11,3 +11,4 @@ ollama pull llama3.2:3b
 *Run the app
 
 npm start
+
