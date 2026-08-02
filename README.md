@@ -1,4 +1,8 @@
+<<<<<<< HEAD
 lear# Callama
+=======
+# Callama
+>>>>>>> origin/main
 
 To Start Project:
 
@@ -12,6 +16,8 @@ ollama pull llama3.2:3b
 
 npm start
 
+
 ![alt text](Callama.jpg)
 
 I Just Woke Up and Started to Make My own Custom Ai 
+
