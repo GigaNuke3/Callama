@@ -1,0 +1,122 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8" />
+<title>Callama (test harness)</title>
+<style>
+  :root { color-scheme: dark; }
+  body {
+    margin: 0; font-family: -apple-system, "Segoe UI", sans-serif;
+    background: #16161a; color: #e6e6e6; display: flex; height: 100vh;
+  }
+  aside {
+    width: 170px; border-right: 1px solid #2a2a30; padding: 12px; flex-shrink: 0;
+  }
+  aside h2 { font-size: 12px; text-transform: uppercase; color: #888; margin: 0 0 8px; }
+  .subject {
+    padding: 8px 10px; border-radius: 6px; cursor: pointer; font-size: 14px; margin-bottom: 4px;
+  }
+  .subject.active { background: #3a3a45; }
+  main { flex: 1; display: flex; flex-direction: column; }
+  #history { flex: 1; overflow-y: auto; padding: 20px; }
+  .msg { margin-bottom: 16px; max-width: 70%; padding: 10px 14px; border-radius: 10px; line-height: 1.4; }
+  .msg.user { background: #2f5d8a; margin-left: auto; }
+  .msg.assistant { background: #26262e; }
+  form { display: flex; gap: 8px; padding: 16px; border-top: 1px solid #2a2a30; }
+  input[type=text] {
+    flex: 1; padding: 10px 12px; border-radius: 8px; border: 1px solid #333; background: #1e1e24; color: #eee;
+  }
+  select, button { padding: 8px 10px; border-radius: 8px; border: 1px solid #333; background: #1e1e24; color: #eee; }
+  button { cursor: pointer; }
+</style>
+</head>
+<body>
+  <aside>
+    <h2>Subject</h2>
+    <div id="subjects"></div>
+    <h2 style="margin-top:16px">Model</h2>
+    <select id="model"></select>
+  </aside>
+  <main>
+    <div id="history"></div>
+    <form id="form">
+      <input id="input" type="text" placeholder="Ask something..." autocomplete="off" />
+      <button type="submit">Send</button>
+    </form>
+  </main>
+
+<script>
+const SUBJECTS = ['predictability', 'health', 'education', 'wellbeing', 'logicalthinking'];
+let activeSubject = 'predictability';
+let streamingEl = null;
+
+const subjectsEl = document.getElementById('subjects');
+const historyEl = document.getElementById('history');
+const formEl = document.getElementById('form');
+const inputEl = document.getElementById('input');
+const modelEl = document.getElementById('model');
+
+function renderSubjectList() {
+  subjectsEl.innerHTML = '';
+  for (const s of SUBJECTS) {
+    const div = document.createElement('div');
+    div.className = 'subject' + (s === activeSubject ? ' active' : '');
+    div.textContent = s;
+    div.onclick = () => { activeSubject = s; renderSubjectList(); loadHistory(); };
+    subjectsEl.appendChild(div);
+  }
+}
+
+function addMessageEl(role, content) {
+  const div = document.createElement('div');
+  div.className = 'msg ' + role;
+  div.textContent = content;
+  historyEl.appendChild(div);
+  historyEl.scrollTop = historyEl.scrollHeight;
+  return div;
+}
+
+async function loadHistory() {
+  historyEl.innerHTML = '';
+  const rows = await window.callama.getHistory(activeSubject);
+  for (const row of rows) addMessageEl(row.role, row.content);
+}
+
+async function loadModels() {
+  try {
+    const models = await window.callama.listModels();
+    modelEl.innerHTML = models.map((m) => `<option value="${m}">${m}</option>`).join('');
+  } catch (e) {
+    modelEl.innerHTML = '<option value="llama3.2:3b">llama3.2:3b (Ollama not reachable)</option>';
+  }
+}
+
+window.callama.onChunk(({ subject, delta }) => {
+  if (subject !== activeSubject) return;
+  if (!streamingEl) streamingEl = addMessageEl('assistant', '');
+  streamingEl.textContent += delta;
+  historyEl.scrollTop = historyEl.scrollHeight;
+});
+
+window.callama.onDone(() => { streamingEl = null; });
+
+formEl.addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const content = inputEl.value.trim();
+  if (!content) return;
+  inputEl.value = '';
+  addMessageEl('user', content);
+  await window.callama.send({
+    subject: activeSubject,
+    content,
+    model: modelEl.value,
+    temperature: 0.7,
+  });
+});
+
+renderSubjectList();
+loadModels();
+loadHistory();
+</script>
+</body>
+</html>

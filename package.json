@@ -1,0 +1,15 @@
+{
+  "name": "callama",
+  "version": "0.1.0",
+  "description": "Offline desktop AI assistant powered by Ollama, with subject-scoped memory",
+  "main": "src/main.js",
+  "scripts": {
+    "start": "electron ."
+  },
+  "dependencies": {
+    "better-sqlite3": "^11.10.0"
+  },
+  "devDependencies": {
+    "electron": "^31.3.1"
+  }
+}

@@ -1,0 +1,5 @@
+node_modules/
+callama.db
+callama.db-wal
+callama.db-shm
+*.log
