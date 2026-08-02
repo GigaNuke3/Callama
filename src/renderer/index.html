@@ -8,30 +8,35 @@
 <body class="bg-base-100 text-base-content">
   <div class="flex h-screen overflow-hidden">
 
-    <aside class="w-60 shrink-0 border-r border-base-300 flex flex-col p-4 gap-6 overflow-y-auto">
-      <div>
+    <aside class="w-64 shrink-0 border-r border-base-300 flex flex-col p-3 gap-3 overflow-hidden">
+      <div class="px-1 pt-1">
         <h1 class="font-display text-base tracking-wide">callama</h1>
         <p class="text-[11px] text-base-content/45 mt-0.5">offline &middot; subject-scoped</p>
       </div>
 
-      <nav class="flex flex-col gap-4">
-        <button
-          class="subject-btn btn btn-sm justify-start font-display normal-case"
-          data-subject="predictability"
-        >predictability</button>
+      <button id="new-chat-btn" class="btn btn-sm btn-outline justify-start font-display normal-case">
+        + new chat
+      </button>
 
-        <div class="subject-link flex flex-col gap-1.5 pl-3">
-            <button class="subject-btn btn btn-sm btn-ghost justify-start font-display normal-case" data-subject="health">health</button>
-            <button class="subject-btn btn btn-sm btn-ghost justify-start font-display normal-case" data-subject="wellbeing">wellbeing</button>
-            </div>
+      <div id="new-chat-form" class="hidden flex-col gap-2 border border-base-300 rounded-lg p-2">
+        <label class="text-[10px] font-display uppercase tracking-widest text-base-content/40">subject</label>
+        <select id="new-chat-subject" class="select select-sm select-bordered w-full">
+          <option value="predictability" selected>predictability</option>
+          <option value="health">health</option>
+          <option value="wellbeing">wellbeing</option>
+          <option value="education">education</option>
+          <option value="logicalthinking">logicalthinking</option>
+        </select>
+        <div class="flex gap-2">
+          <button id="new-chat-confirm" class="btn btn-sm btn-primary font-display normal-case flex-1">create</button>
+          <button id="new-chat-cancel" class="btn btn-sm btn-ghost font-display normal-case">cancel</button>
+        </div>
+      </div>
 
-            <div class="subject-link flex flex-col gap-1.5 pl-3">
-            <button class="subject-btn btn btn-sm btn-ghost justify-start font-display normal-case" data-subject="education">education</button>
-            <button class="subject-btn btn btn-sm btn-ghost justify-start font-display normal-case" data-subject="logicalthinking">logicalthinking</button>
-            </div>
-      </nav>
+      <div class="text-[10px] font-display uppercase tracking-widest text-base-content/40 px-1 mt-1">chats</div>
+      <div id="chat-list" class="flex-1 overflow-y-auto flex flex-col gap-0.5 -mx-1 px-1"></div>
 
-      <div class="mt-auto flex flex-col gap-3">
+      <div class="flex flex-col gap-3 border-t border-base-300 pt-3">
         <div>
           <label class="text-[10px] font-display uppercase tracking-widest text-base-content/40">model</label>
           <select id="model" class="select select-sm select-bordered w-full mt-1"></select>
@@ -39,17 +44,18 @@
         <div>
           <label class="text-[10px] font-display uppercase tracking-widest text-base-content/40">
             temperature <span id="temp-val" class="text-base-content/70">0.7</span>
+            <span class="text-base-content/30">(auto, by subject)</span>
           </label>
-          <input id="temperature" type="range" min="0" max="1" step="0.1" value="0.7"
-                 class="range range-xs range-primary mt-2" />
+          <input id="temperature" type="range" min="0" max="1" step="0.1" value="0.7" disabled
+                 class="range range-xs range-primary mt-2 opacity-60 cursor-not-allowed" />
         </div>
       </div>
     </aside>
 
     <main class="flex-1 flex flex-col min-w-0">
       <header class="border-b border-base-300 px-6 py-3 shrink-0">
-        <h2 id="subject-title" class="font-display text-sm uppercase tracking-wide text-primary"></h2>
-        <p id="subject-desc" class="text-[12px] text-base-content/50 mt-0.5"></p>
+        <h2 id="chat-title" class="font-display text-sm tracking-wide"></h2>
+        <p id="chat-subject-desc" class="text-[12px] text-base-content/50 mt-0.5"></p>
       </header>
 
       <div id="history" class="flex-1 overflow-y-auto px-6 py-5 flex flex-col"></div>
@@ -68,43 +74,150 @@
   </div>
 
 <script>
-const SUBJECTS = {
-  predictability: { label: 'predictability', desc: 'Day-to-day questions. Default context — reads across all four subjects below.' },
-  health:         { label: 'health',         desc: 'Physical & mental health questions. Linked with wellbeing.' },
-  wellbeing:      { label: 'wellbeing',       desc: 'Mental health, philosophy, focusing on yourself. Linked with health.' },
-  education:      { label: 'education',       desc: 'Creative writing & general knowledge. Linked with logicalthinking.' },
-  logicalthinking:{ label: 'logicalthinking', desc: 'Code, math, engineering. Linked with education.' },
+const SUBJECT_DESC = {
+  predictability: 'Day-to-day questions. Default context — reads across all four subjects.',
+  health:         'Physical & mental health questions. Linked with wellbeing.',
+  wellbeing:      'Mental health, philosophy, focusing on yourself. Linked with health.',
+  education:      'Creative writing & general knowledge. Linked with logicalthinking.',
+  logicalthinking:'Code, math, engineering. Linked with education.',
 };
 
-let activeSubject = 'predictability';
+// Static, per-subject temperature — not user-adjustable. Lower values
+// for subjects where correctness matters more than variety (logical
+// thinking, health); higher values where natural, varied phrasing is
+// the point (predictability, general conversation).
+const SUBJECT_TEMPERATURE = {
+  logicalthinking: 0.2,
+  health: 0.3,
+  wellbeing: 0.6,
+  education: 0.6,
+  predictability: 0.7,
+};
+
+let chats = [];
+let activeChatId = null;
 let streamingBubble = null;
 
+const chatListEl = document.getElementById('chat-list');
+const newChatBtn = document.getElementById('new-chat-btn');
+const newChatForm = document.getElementById('new-chat-form');
+const newChatSubject = document.getElementById('new-chat-subject');
+const newChatConfirm = document.getElementById('new-chat-confirm');
+const newChatCancel = document.getElementById('new-chat-cancel');
 const historyEl = document.getElementById('history');
 const formEl = document.getElementById('form');
 const inputEl = document.getElementById('input');
 const modelEl = document.getElementById('model');
 const tempEl = document.getElementById('temperature');
 const tempValEl = document.getElementById('temp-val');
-const titleEl = document.getElementById('subject-title');
-const descEl = document.getElementById('subject-desc');
+const titleEl = document.getElementById('chat-title');
+const descEl = document.getElementById('chat-subject-desc');
 
-tempEl.addEventListener('input', () => { tempValEl.textContent = tempEl.value; });
-
-function setActiveSubject(subject) {
-  activeSubject = subject;
-  document.querySelectorAll('.subject-btn').forEach((btn) => {
-    const isActive = btn.dataset.subject === subject;
-    btn.classList.toggle('btn-primary', isActive);
-    btn.classList.toggle('btn-ghost', !isActive);
-  });
-  titleEl.textContent = SUBJECTS[subject].label;
-  descEl.textContent = SUBJECTS[subject].desc;
-  loadHistory();
+newChatBtn.addEventListener('click', () => {
+  newChatForm.classList.remove('hidden');
+  newChatForm.classList.add('flex');
+  newChatBtn.classList.add('hidden');
+});
+newChatCancel.addEventListener('click', () => closeNewChatForm());
+function closeNewChatForm() {
+  newChatForm.classList.add('hidden');
+  newChatForm.classList.remove('flex');
+  newChatBtn.classList.remove('hidden');
+  newChatSubject.value = 'predictability';
 }
 
-document.querySelectorAll('.subject-btn').forEach((btn) => {
-  btn.addEventListener('click', () => setActiveSubject(btn.dataset.subject));
+newChatConfirm.addEventListener('click', async () => {
+  const chat = await window.callama.createChat(newChatSubject.value);
+  closeNewChatForm();
+  await refreshChatList();
+  await setActiveChat(chat.id);
 });
+
+async function refreshChatList() {
+  chats = await window.callama.listChats();
+  chatListEl.innerHTML = '';
+  for (const chat of chats) chatListEl.appendChild(chatListItem(chat));
+}
+
+function chatListItem(chat) {
+  const row = document.createElement('div');
+  row.className = 'group flex items-center gap-1 rounded-md px-2 py-1.5 cursor-pointer hover:bg-base-200' +
+    (chat.id === activeChatId ? ' bg-base-200' : '');
+  row.dataset.chatId = chat.id;
+
+  const title = document.createElement('span');
+  title.className = 'flex-1 text-[13px] truncate';
+  title.textContent = chat.title;
+  row.appendChild(title);
+
+  const subjectTag = document.createElement('span');
+  subjectTag.className = 'text-[10px] font-display text-base-content/35 shrink-0';
+  subjectTag.textContent = chat.subject.slice(0, 4);
+  row.appendChild(subjectTag);
+
+  const editBtn = iconBtn('rename');
+  const delBtn = iconBtn('delete');
+  editBtn.classList.add('opacity-0', 'group-hover:opacity-100');
+  delBtn.classList.add('opacity-0', 'group-hover:opacity-100');
+
+  editBtn.addEventListener('click', (e) => { e.stopPropagation(); renameChatInline(row, chat, title); });
+  delBtn.addEventListener('click', async (e) => {
+    e.stopPropagation();
+    await window.callama.deleteChat(chat.id);
+    if (activeChatId === chat.id) activeChatId = null;
+    await refreshChatList();
+    if (!activeChatId && chats.length > 0) await setActiveChat(chats[0].id);
+    else if (!chats.length) { titleEl.textContent = ''; descEl.textContent = ''; historyEl.innerHTML = ''; }
+  });
+
+  row.appendChild(editBtn);
+  row.appendChild(delBtn);
+  row.addEventListener('click', () => setActiveChat(chat.id));
+  return row;
+}
+
+function iconBtn(kind) {
+  const btn = document.createElement('button');
+  btn.className = 'shrink-0 text-[11px] text-base-content/50 hover:text-base-content px-1 transition-opacity';
+  btn.textContent = kind === 'rename' ? '✎' : '×';
+  btn.title = kind === 'rename' ? 'Rename' : 'Delete';
+  return btn;
+}
+
+function renameChatInline(row, chat, titleEl2) {
+  const input = document.createElement('input');
+  input.className = 'input input-xs input-bordered flex-1';
+  input.value = chat.title;
+  titleEl2.replaceWith(input);
+  input.focus();
+  input.select();
+
+  const commit = async () => {
+    const newTitle = input.value.trim() || chat.title;
+    await window.callama.renameChat(chat.id, newTitle);
+    chat.title = newTitle;
+    await refreshChatList();
+  };
+  input.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') { e.preventDefault(); commit(); }
+    if (e.key === 'Escape') refreshChatList();
+  });
+  input.addEventListener('blur', commit);
+}
+
+async function setActiveChat(chatId) {
+  activeChatId = chatId;
+  const chat = chats.find((c) => c.id === chatId);
+  if (chat) {
+    titleEl.textContent = chat.title;
+    descEl.textContent = SUBJECT_DESC[chat.subject];
+    const temp = SUBJECT_TEMPERATURE[chat.subject];
+    tempEl.value = temp;
+    tempValEl.textContent = temp;
+  }
+  await refreshChatList();
+  await loadHistory();
+}
 
 function bubble(row) {
   const isUser = row.role === 'user';
@@ -140,12 +253,13 @@ function startEdit(wrap, contentEl, row) {
     while (wrap.nextSibling) wrap.nextSibling.remove();
     textarea.replaceWith(bubbleContentOnly(newContent));
     await window.callama.edit({
-      subject: activeSubject,
+      chatId: activeChatId,
       id: row.id,
       content: newContent,
       model: modelEl.value,
       temperature: parseFloat(tempEl.value),
     });
+    await refreshChatList();
   };
 
   textarea.addEventListener('keydown', (e) => {
@@ -163,7 +277,8 @@ function bubbleContentOnly(text) {
 
 async function loadHistory() {
   historyEl.innerHTML = '';
-  const rows = await window.callama.getHistory(activeSubject);
+  if (!activeChatId) return;
+  const rows = await window.callama.getHistory(activeChatId);
   for (const row of rows) historyEl.appendChild(bubble(row));
   historyEl.scrollTop = historyEl.scrollHeight;
 }
@@ -177,8 +292,8 @@ async function loadModels() {
   }
 }
 
-window.callama.onChunk(({ subject, delta }) => {
-  if (subject !== activeSubject) return;
+window.callama.onChunk(({ chatId, delta }) => {
+  if (chatId !== activeChatId) return;
   if (!streamingBubble) {
     const wrap = document.createElement('div');
     wrap.className = 'chat chat-start';
@@ -191,17 +306,20 @@ window.callama.onChunk(({ subject, delta }) => {
   historyEl.scrollTop = historyEl.scrollHeight;
 });
 
-window.callama.onDone(() => { streamingBubble = null; });
+window.callama.onDone(async () => {
+  streamingBubble = null;
+  await refreshChatList();
+});
 
 formEl.addEventListener('submit', async (e) => {
   e.preventDefault();
   const content = inputEl.value.trim();
-  if (!content) return;
+  if (!content || !activeChatId) return;
   inputEl.value = '';
   historyEl.appendChild(bubble({ role: 'user', content, id: null }));
   historyEl.scrollTop = historyEl.scrollHeight;
   await window.callama.send({
-    subject: activeSubject,
+    chatId: activeChatId,
     content,
     model: modelEl.value,
     temperature: parseFloat(tempEl.value),
@@ -213,8 +331,18 @@ inputEl.addEventListener('keydown', (e) => {
   if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); formEl.requestSubmit(); }
 });
 
-setActiveSubject('predictability');
-loadModels();
+async function init() {
+  await loadModels();
+  await refreshChatList();
+  if (chats.length > 0) {
+    await setActiveChat(chats[0].id);
+  } else {
+    const chat = await window.callama.createChat('predictability');
+    await refreshChatList();
+    await setActiveChat(chat.id);
+  }
+}
+init();
 </script>
 </body>
 </html>

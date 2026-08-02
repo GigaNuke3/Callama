@@ -5,7 +5,6 @@
 @plugin "daisyui/theme" {
   name: "callama";
   default: true;
-  color-scheme: dark;
   color-scheme: light;
   --color-base-100: #ffffff;
   --color-base-200: #f5f5f4;

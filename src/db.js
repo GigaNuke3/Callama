@@ -21,16 +21,34 @@ function openDatabase(dbPath) {
   db.pragma('journal_mode = WAL');
   db.pragma('foreign_keys = ON');
 
+  // Chats are the actual conversations the user sees in the sidebar.
+  // A chat's subject is fixed at creation and never changes — see
+  // the note in ChatStore.createChat for why.
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS chats (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      subject TEXT NOT NULL CHECK (subject IN ('predictability','health','education','wellbeing','logicalthinking')),
+      title TEXT NOT NULL DEFAULT 'New chat',
+      created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+      updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+    );
+  `);
+
+  // Each subject table now scopes its rows to a specific chat via
+  // chat_id. ON DELETE CASCADE means deleting a chat row automatically
+  // removes its messages from whichever subject table they live in.
   for (const subject of SUBJECTS) {
     db.exec(`
       CREATE TABLE IF NOT EXISTS ${subject} (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
+        chat_id INTEGER NOT NULL REFERENCES chats(id) ON DELETE CASCADE,
         role TEXT NOT NULL CHECK (role IN ('user', 'assistant')),
         content TEXT NOT NULL,
         created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
         edited_at TEXT
       );
     `);
+    db.exec(`CREATE INDEX IF NOT EXISTS idx_${subject}_chat_id ON ${subject}(chat_id);`);
   }
 
   return db;
@@ -47,47 +65,111 @@ class ChatStore {
     }
   }
 
-  // Insert a new message into a subject table. Returns the new row.
-  addMessage(subject, role, content) {
+  _getChat(chatId) {
+    const chat = this.db.prepare('SELECT * FROM chats WHERE id = ?').get(chatId);
+    if (!chat) throw new Error(`Unknown chat: ${chatId}`);
+    return chat;
+  }
+
+  // Public accessor — same lookup, for callers outside this class
+  // (e.g. main.js needs the chat's subject to pick a system prompt).
+  getChat(chatId) {
+    return this._getChat(chatId);
+  }
+
+  // --- Chat CRUD -----------------------------------------------------
+
+  // Subject is chosen once, here, and never changes afterward. If it
+  // could change later, a chat's earlier messages (already written into
+  // the OLD subject's table) would become unreachable — there'd be no
+  // way to find them again since lookups are always subject-scoped.
+  createChat(subject = 'predictability', title = 'New chat') {
     this._assertSubject(subject);
+    const info = this.db
+      .prepare('INSERT INTO chats (subject, title) VALUES (?, ?)')
+      .run(subject, title);
+    return this._getChat(info.lastInsertRowid);
+  }
+
+  listChats() {
+    return this.db.prepare('SELECT * FROM chats ORDER BY updated_at DESC').all();
+  }
+
+  renameChat(chatId, title) {
+    this.db.prepare('UPDATE chats SET title = ? WHERE id = ?').run(title, chatId);
+    return this._getChat(chatId);
+  }
+
+  deleteChat(chatId) {
+    // Cascades into whichever subject table holds this chat's messages.
+    this.db.prepare('DELETE FROM chats WHERE id = ?').run(chatId);
+  }
+
+  touchChat(chatId) {
+    this.db
+      .prepare(`UPDATE chats SET updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE id = ?`)
+      .run(chatId);
+  }
+
+  // --- Messages --------------------------------------------------------
+
+  // Insert a new message into a chat's subject table.
+  addMessage(chatId, role, content) {
+    const chat = this._getChat(chatId);
     const stmt = this.db.prepare(
-      `INSERT INTO ${subject} (role, content) VALUES (?, ?)`
+      `INSERT INTO ${chat.subject} (chat_id, role, content) VALUES (?, ?, ?)`
     );
-    const info = stmt.run(role, content);
+    const info = stmt.run(chatId, role, content);
+    this.touchChat(chatId);
     return this.db
-      .prepare(`SELECT * FROM ${subject} WHERE id = ?`)
+      .prepare(`SELECT * FROM ${chat.subject} WHERE id = ?`)
       .get(info.lastInsertRowid);
   }
 
-  // Edit an existing user message, discarding everything that came
-  // after it in the SAME table (its old reply + any later turns).
-  // The new AI response is generated fresh by the caller afterward.
-  editMessage(subject, id, newContent) {
-    this._assertSubject(subject);
-    const del = this.db.prepare(`DELETE FROM ${subject} WHERE id > ?`);
-    const upd = this.db.prepare(
-      `UPDATE ${subject} SET content = ?, edited_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE id = ?`
-    );
-    const tx = this.db.transaction((subj, msgId, text) => {
-      del.run(msgId);
-      upd.run(text, msgId);
-    });
-    tx(subject, id, newContent);
-    return this.db.prepare(`SELECT * FROM ${subject} WHERE id = ?`).get(id);
+  // This chat's own message history — what the UI displays.
+  getHistory(chatId) {
+    const chat = this._getChat(chatId);
+    return this.db
+      .prepare(`SELECT * FROM ${chat.subject} WHERE chat_id = ? ORDER BY id ASC`)
+      .all(chatId);
   }
 
-  // Build the context to send to Ollama: this subject's own history,
-  // plus (if allowed) the linked subjects' history, merged in time order.
-  getContext(subject, { limit = 40 } = {}) {
-    this._assertSubject(subject);
-    const readable = [subject, ...(CAN_READ[subject] || [])];
+  // Edit an existing user message, discarding everything that came
+  // after it in the SAME chat (its old reply + any later turns).
+  editMessage(chatId, id, newContent) {
+    const chat = this._getChat(chatId);
+    const del = this.db.prepare(`DELETE FROM ${chat.subject} WHERE chat_id = ? AND id > ?`);
+    const upd = this.db.prepare(
+      `UPDATE ${chat.subject} SET content = ?, edited_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE id = ?`
+    );
+    const tx = this.db.transaction((cId, msgId, text) => {
+      del.run(cId, msgId);
+      upd.run(text, msgId);
+    });
+    tx(chatId, id, newContent);
+    return this.db.prepare(`SELECT * FROM ${chat.subject} WHERE id = ?`).get(id);
+  }
 
-    const rows = readable.flatMap((subj) =>
+  // Build the context to send to Ollama for a given chat:
+  // - the chat's OWN messages (scoped to this chat_id only)
+  // - plus, if the subject allows it, the most recent messages from
+  //   linked subjects, blended across ALL chats in those subjects
+  //   (not just one chat) — since a linked subject is a whole domain
+  //   of context, not a single conversation.
+  getContext(chatId, { limit = 40 } = {}) {
+    const chat = this._getChat(chatId);
+    const own = this.db
+      .prepare(`SELECT id, role, content, created_at, '${chat.subject}' as source FROM ${chat.subject} WHERE chat_id = ?`)
+      .all(chatId);
+
+    const linkedSubjects = CAN_READ[chat.subject] || [];
+    const linked = linkedSubjects.flatMap((subj) =>
       this.db
         .prepare(`SELECT id, role, content, created_at, '${subj}' as source FROM ${subj}`)
         .all()
     );
 
+    const rows = [...own, ...linked];
     rows.sort((a, b) => a.created_at.localeCompare(b.created_at));
     return rows.slice(-limit);
   }
