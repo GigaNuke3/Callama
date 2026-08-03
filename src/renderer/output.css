@@ -822,6 +822,21 @@
       cursor: not-allowed;
       opacity: 30%;
     }
+    .indicator {
+      position: relative;
+      display: inline-flex;
+      width: max-content;
+    }
+    .indicator :where(.indicator-item) {
+      z-index: 1;
+      position: absolute;
+      white-space: nowrap;
+      top: var(--indicator-t, 0);
+      bottom: var(--indicator-b, auto);
+      left: var(--indicator-s, auto);
+      right: var(--indicator-e, 0);
+      translate: var(--indicator-x, 50%) var(--indicator-y, -50%);
+    }
     .table {
       font-size: 0.875rem;
       position: relative;
@@ -1719,11 +1734,20 @@
   .inline {
     display: inline;
   }
+  .inline-block {
+    display: inline-block;
+  }
   .table {
     display: table;
   }
+  .h-1\.5 {
+    height: calc(var(--spacing) * 1.5);
+  }
   .h-screen {
     height: 100vh;
+  }
+  .w-1\.5 {
+    width: calc(var(--spacing) * 1.5);
   }
   .w-64 {
     width: calc(var(--spacing) * 64);
@@ -1790,6 +1814,9 @@
   .gap-1 {
     gap: var(--spacing);
   }
+  .gap-1\.5 {
+    gap: calc(var(--spacing) * 1.5);
+  }
   .gap-2 {
     gap: calc(var(--spacing) * 2);
   }
@@ -1806,6 +1833,9 @@
   }
   .overflow-y-auto {
     overflow-y: auto;
+  }
+  .rounded-full {
+    border-radius: calc(infinity * 1px);
   }
   .rounded-lg {
     border-radius: var(--radius-lg);
@@ -1843,6 +1873,15 @@
   }
   .bg-base-200 {
     background-color: var(--color-base-200);
+  }
+  .bg-base-content {
+    background-color: var(--color-base-content);
+  }
+  .bg-base-content\/30 {
+    background-color: var(--color-base-content);
+    @supports (color: color-mix(in lab, red, red)) {
+      background-color: color-mix(in oklab, var(--color-base-content) 30%, transparent);
+    }
   }
   @layer daisyui.l1.l2.l3 {
     .btn-outline {

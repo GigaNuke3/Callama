@@ -12,7 +12,10 @@
     <aside class="w-64 shrink-0 border-r border-base-300 flex flex-col p-3 gap-3 overflow-hidden">
       <div class="px-1 pt-1">
         <h1 class="font-display text-base tracking-wide">callama</h1>
-        <p class="text-[11px] text-base-content/45 mt-0.5">offline &middot; subject-scoped</p>
+        <p class="text-[11px] text-base-content/45 mt-0.5 flex items-center gap-1.5">
+          <span id="ollama-dot" class="inline-block w-1.5 h-1.5 rounded-full bg-base-content/30"></span>
+          <span id="ollama-status-text">offline &middot; subject-scoped</span>
+        </p>
       </div>
 
       <button id="new-chat-btn" class="btn btn-sm btn-outline justify-start font-display normal-case">
@@ -68,7 +71,7 @@
           class="textarea textarea-bordered flex-1 resize-none leading-relaxed"
           placeholder="Ask something..."
         ></textarea>
-        <button type="submit" class="btn btn-primary font-display normal-case">send</button>
+        <button type="submit" id="send-btn" class="btn btn-primary font-display normal-case">send</button>
       </form>
     </main>
 
@@ -99,6 +102,7 @@ let chats = [];
 let activeChatId = null;
 let streamingBubble = null;
 let streamingRaw = '';
+const streamingChats = new Set();
 
 const chatListEl = document.getElementById('chat-list');
 const newChatBtn = document.getElementById('new-chat-btn');
@@ -108,6 +112,9 @@ const newChatConfirm = document.getElementById('new-chat-confirm');
 const newChatCancel = document.getElementById('new-chat-cancel');
 const historyEl = document.getElementById('history');
 const formEl = document.getElementById('form');
+const sendBtn = document.getElementById('send-btn');
+const ollamaDot = document.getElementById('ollama-dot');
+const ollamaStatusText = document.getElementById('ollama-status-text');
 const inputEl = document.getElementById('input');
 const modelEl = document.getElementById('model');
 const tempEl = document.getElementById('temperature');
@@ -219,7 +226,22 @@ async function setActiveChat(chatId) {
   }
   await refreshChatList();
   await loadHistory();
+  updateSendButton();
 }
+
+function updateSendButton() {
+  const streaming = streamingChats.has(activeChatId);
+  sendBtn.textContent = streaming ? 'stop' : 'send';
+  sendBtn.type = streaming ? 'button' : 'submit';
+  sendBtn.classList.toggle('btn-primary', !streaming);
+  sendBtn.classList.toggle('btn-outline', streaming);
+}
+sendBtn.addEventListener('click', (e) => {
+  if (sendBtn.type === 'button') {
+    e.preventDefault();
+    window.callama.stop(activeChatId);
+  }
+});
 
 function bubble(row) {
   const isUser = row.role === 'user';
@@ -289,6 +311,14 @@ async function loadHistory() {
   historyEl.scrollTop = historyEl.scrollHeight;
 }
 
+async function checkOllamaStatus() {
+  const { connected } = await window.callama.checkOllama();
+  ollamaDot.classList.toggle('bg-base-content', connected);
+  ollamaDot.classList.toggle('bg-base-content/30', !connected);
+  ollamaStatusText.textContent = connected ? 'connected · subject-scoped' : 'not connected · subject-scoped';
+  return connected;
+}
+
 async function loadModels() {
   try {
     const models = await window.callama.listModels();
@@ -299,6 +329,10 @@ async function loadModels() {
 }
 
 window.callama.onChunk(({ chatId, delta }) => {
+  if (!streamingChats.has(chatId)) {
+    streamingChats.add(chatId);
+    if (chatId === activeChatId) updateSendButton();
+  }
   if (chatId !== activeChatId) return;
   if (!streamingBubble) {
     const wrap = document.createElement('div');
@@ -314,16 +348,26 @@ window.callama.onChunk(({ chatId, delta }) => {
   historyEl.scrollTop = historyEl.scrollHeight;
 });
 
-window.callama.onDone(async () => {
-  streamingBubble = null;
-  streamingRaw = '';
+window.callama.onDone(async ({ chatId, stopped }) => {
+  streamingChats.delete(chatId);
+  if (chatId === activeChatId) {
+    if (stopped && streamingBubble) {
+      const tag = document.createElement('div');
+      tag.className = 'text-[11px] text-base-content/40 mt-1';
+      tag.textContent = 'stopped';
+      streamingBubble.parentElement.appendChild(tag);
+    }
+    streamingBubble = null;
+    streamingRaw = '';
+    updateSendButton();
+  }
   await refreshChatList();
 });
 
 formEl.addEventListener('submit', async (e) => {
   e.preventDefault();
   const content = inputEl.value.trim();
-  if (!content || !activeChatId) return;
+  if (!content || !activeChatId || streamingChats.has(activeChatId)) return;
   inputEl.value = '';
   historyEl.appendChild(bubble({ role: 'user', content, id: null }));
   historyEl.scrollTop = historyEl.scrollHeight;
@@ -341,7 +385,13 @@ inputEl.addEventListener('keydown', (e) => {
 });
 
 async function init() {
+  await checkOllamaStatus();
   await loadModels();
+  setInterval(async () => {
+    const wasConnected = ollamaDot.classList.contains('bg-base-content');
+    const connected = await checkOllamaStatus();
+    if (connected && !wasConnected) await loadModels(); // just came online — refresh the model list
+  }, 5000);
   await refreshChatList();
   if (chats.length > 0) {
     await setActiveChat(chats[0].id);
