@@ -108,11 +108,63 @@ app.on('window-all-closed', () => {
 // on demand (e.g. a retry button) without restarting the app.
 ipcMain.handle('ollama:status', async () => ({ connected: await isOllamaReachable() }));
 
+// The model used to turn text into a vector for memory search. Needs to
+// be pulled separately (`ollama pull nomic-embed-text`) — small and CPU-
+// friendly. Every embed() call is wrapped so a missing/failed embedding
+// model degrades memory features silently rather than breaking chat.
+const EMBED_MODEL = 'nomic-embed-text';
+
+async function embed(text) {
+  try {
+    const res = await fetch(`${OLLAMA_URL}/api/embeddings`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ model: EMBED_MODEL, prompt: text }),
+    });
+    if (!res.ok) return null;
+    const data = await res.json();
+    return data.embedding || null;
+  } catch {
+    return null;
+  }
+}
+
 // List locally installed Ollama models, for the model-picker dropdown.
 ipcMain.handle('models:list', async () => {
   const res = await fetch(`${OLLAMA_URL}/api/tags`);
   const data = await res.json();
-  return (data.models || []).map((m) => m.name);
+  // Exclude embedding-only models (e.g. nomic-embed-text) — they have no
+  // chat/generation capability and would break responses if selected.
+  // EMBED_MODEL itself is always excluded; the "embed" substring check
+  // catches other common embedding model families too (mxbai-embed-*, etc.)
+  return (data.models || [])
+    .map((m) => m.name)
+    .filter((name) => name !== EMBED_MODEL && !name.toLowerCase().includes('embed'));
+});
+
+// --- Memory (manual v1) -------------------------------------------------
+
+ipcMain.handle('memory:save', async (_event, { subject, content, chatId }) => {
+  const embedding = await embed(content);
+  if (!embedding) return { saved: false, reason: 'embedding-unavailable' };
+
+  // Duplicate guard: if something near-identical is already remembered
+  // for THIS EXACT subject, skip the save rather than piling up copies.
+  // (Deliberately not using searchMemories here — that's scoped to the
+  // access matrix, which would wrongly block saving to Health just
+  // because a similar memory exists in linked WellBeing.)
+  const existing = store.findSimilarInSubject(subject, embedding);
+  if (existing) return { saved: false, reason: 'duplicate', existing };
+
+  const memory = store.saveMemory(subject, content, embedding, chatId ?? null);
+  return { saved: true, memory };
+});
+
+ipcMain.handle('memory:list', (_event, { subject } = {}) => store.listMemories(subject));
+
+ipcMain.handle('memory:delete', (_event, { id }) => {
+  store.deleteMemory(id);
+  return { id };
 });
 
 // --- Chat CRUD ---------------------------------------------------------
@@ -172,10 +224,29 @@ ipcMain.handle('chat:send', async (event, { chatId, content, model, temperature 
 async function streamReply(event, chatId, model, temperature) {
   const chat = store.getChat(chatId);
   const context = store.getContext(chatId);
-  const messages = [
-    { role: 'system', content: SUBJECT_PROMPTS[chat.subject] },
-    ...context.map((m) => ({ role: m.role, content: m.content })),
-  ];
+
+  const messages = [{ role: 'system', content: SUBJECT_PROMPTS[chat.subject] }];
+
+  // Memory retrieval: embed the most recent message (the thing that
+  // triggered this reply) and pull in whatever's actually relevant from
+  // this subject's memory store, regardless of how long ago it was
+  // saved or whether it's still within the recent-messages window.
+  const latest = context[context.length - 1];
+  if (latest) {
+    const queryEmbedding = await embed(latest.content);
+    if (queryEmbedding) {
+      const memories = store.searchMemories(chat.subject, queryEmbedding);
+      if (memories.length > 0) {
+        messages.push({
+          role: 'system',
+          content: 'Relevant memory from past conversations (may or may not be relevant — use your judgment):\n' +
+            memories.map((m) => `- ${m.content}`).join('\n'),
+        });
+      }
+    }
+  }
+
+  messages.push(...context.map((m) => ({ role: m.role, content: m.content })));
 
   const controller = new AbortController();
   activeStreams.set(chatId, controller);

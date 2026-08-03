@@ -18,9 +18,14 @@
         </p>
       </div>
 
-      <button id="new-chat-btn" class="btn btn-sm btn-outline justify-start font-display normal-case">
-        + new chat
-      </button>
+      <div class="flex gap-2">
+        <button id="new-chat-btn" class="btn btn-sm btn-outline justify-start font-display normal-case flex-1">
+          + new chat
+        </button>
+        <button id="memory-btn" class="btn btn-sm btn-outline font-display normal-case" title="View memories">
+          mem
+        </button>
+      </div>
 
       <div id="new-chat-form" class="hidden flex-col gap-2 border border-base-300 rounded-lg p-2">
         <label class="text-[10px] font-display uppercase tracking-widest text-base-content/40">subject</label>
@@ -77,6 +82,23 @@
 
   </div>
 
+  <dialog id="memory-modal" class="modal">
+    <div class="modal-box max-w-lg">
+      <h3 class="font-display text-sm uppercase tracking-wide">memories</h3>
+      <p class="text-[12px] text-base-content/50 mt-1">
+        Facts saved from conversations, searched by relevance rather than recency —
+        these can surface even in a brand new chat if they're relevant to what you ask.
+      </p>
+      <div id="memory-list" class="mt-4 flex flex-col gap-2 max-h-96 overflow-y-auto"></div>
+      <div class="modal-action">
+        <form method="dialog">
+          <button class="btn btn-sm font-display normal-case">close</button>
+        </form>
+      </div>
+    </div>
+    <form method="dialog" class="modal-backdrop"><button>close</button></form>
+  </dialog>
+
 <script>
 const SUBJECT_DESC = {
   predictability: 'Day-to-day questions. Default context — reads across all four subjects.',
@@ -106,6 +128,9 @@ const streamingChats = new Set();
 
 const chatListEl = document.getElementById('chat-list');
 const newChatBtn = document.getElementById('new-chat-btn');
+const memoryBtn = document.getElementById('memory-btn');
+const memoryModal = document.getElementById('memory-modal');
+const memoryListEl = document.getElementById('memory-list');
 const newChatForm = document.getElementById('new-chat-form');
 const newChatSubject = document.getElementById('new-chat-subject');
 const newChatConfirm = document.getElementById('new-chat-confirm');
@@ -127,6 +152,46 @@ newChatBtn.addEventListener('click', () => {
   newChatForm.classList.add('flex');
   newChatBtn.classList.add('hidden');
 });
+
+memoryBtn.addEventListener('click', () => openMemoryModal());
+
+async function openMemoryModal() {
+  const memories = await window.callama.listMemories();
+  memoryListEl.innerHTML = '';
+  if (memories.length === 0) {
+    const empty = document.createElement('p');
+    empty.className = 'text-[12px] text-base-content/40';
+    empty.textContent = 'No memories saved yet — hover a message and click "remember" to save one.';
+    memoryListEl.appendChild(empty);
+  }
+  for (const m of memories) {
+    const row = document.createElement('div');
+    row.className = 'flex items-start gap-2 border-b border-base-300 pb-2';
+
+    const text = document.createElement('div');
+    text.className = 'flex-1 text-[12px]';
+    const tag = document.createElement('span');
+    tag.className = 'font-display text-base-content/40 mr-1';
+    tag.textContent = `[${m.subject}]`;
+    text.appendChild(tag);
+    text.appendChild(document.createTextNode(m.content));
+    row.appendChild(text);
+
+    const del = document.createElement('button');
+    del.className = 'text-[13px] text-base-content/40 hover:text-base-content shrink-0';
+    del.textContent = '×';
+    del.title = 'Delete this memory';
+    del.addEventListener('click', async () => {
+      await window.callama.deleteMemory(m.id);
+      openMemoryModal();
+    });
+    row.appendChild(del);
+
+    memoryListEl.appendChild(row);
+  }
+  memoryModal.showModal();
+}
+
 newChatCancel.addEventListener('click', () => closeNewChatForm());
 function closeNewChatForm() {
   newChatForm.classList.add('hidden');
@@ -257,23 +322,42 @@ function bubble(row, { isLastAssistant = false } = {}) {
   }
   wrap.appendChild(content);
 
-  if (isUser && row.id) {
-    const footer = document.createElement('div');
-    footer.className = 'chat-footer opacity-0 group-hover:opacity-100 text-[11px] text-base-content/40 cursor-pointer mt-0.5 transition-opacity';
-    footer.textContent = row.edited_at ? 'edited · click to edit again' : 'edit';
-    footer.addEventListener('click', () => startEdit(wrap, content, row));
-    wrap.appendChild(footer);
-  }
+  if (!row.id) return wrap;
 
-  if (!isUser && isLastAssistant && row.id) {
-    const footer = document.createElement('div');
-    footer.className = 'chat-footer opacity-0 group-hover:opacity-100 text-[11px] text-base-content/40 cursor-pointer mt-0.5 transition-opacity';
-    footer.textContent = 'regenerate';
-    footer.addEventListener('click', () => regenerate(wrap, row));
-    wrap.appendChild(footer);
+  const actions = [];
+  if (isUser) {
+    actions.push([row.edited_at ? 'edited · click to edit again' : 'edit', () => startEdit(wrap, content, row)]);
   }
+  if (!isUser && isLastAssistant) {
+    actions.push(['regenerate', () => regenerate(wrap, row)]);
+  }
+  actions.push(['remember', (actionEl) => saveAsMemory(row, actionEl)]);
+
+  const footer = document.createElement('div');
+  footer.className = 'chat-footer opacity-0 group-hover:opacity-100 flex gap-2 text-[11px] text-base-content/40 mt-0.5 transition-opacity';
+  for (const [label, handler] of actions) {
+    const actionEl = document.createElement('span');
+    actionEl.className = 'cursor-pointer hover:text-base-content';
+    actionEl.textContent = label;
+    actionEl.addEventListener('click', () => handler(actionEl));
+    footer.appendChild(actionEl);
+  }
+  wrap.appendChild(footer);
 
   return wrap;
+}
+
+async function saveAsMemory(row, actionEl) {
+  const activeChat = chats.find((c) => c.id === activeChatId);
+  if (!activeChat) return;
+  actionEl.textContent = 'saving...';
+  const result = await window.callama.saveMemory(activeChat.subject, row.content, activeChatId);
+  actionEl.textContent = result.saved
+    ? 'saved ✓'
+    : result.reason === 'duplicate' ? 'already saved' : 'unavailable';
+  if (!result.saved) {
+    setTimeout(() => { actionEl.textContent = 'remember'; }, 1500);
+  }
 }
 
 async function regenerate(wrap, row) {

@@ -51,6 +51,25 @@ function openDatabase(dbPath) {
     db.exec(`CREATE INDEX IF NOT EXISTS idx_${subject}_chat_id ON ${subject}(chat_id);`);
   }
 
+  // Memory store (Option B, denormalized): each row holds its OWN copy
+  // of the remembered text and its embedding, with no live foreign key
+  // back to the message it came from. That's deliberate — memory should
+  // survive even if the original message is later edited or deleted, or
+  // ages out of the recent-messages context window. source_chat_id is
+  // purely informational (not a constraint) for "where did this come
+  // from" display purposes only.
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS memories (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      subject TEXT NOT NULL CHECK (subject IN ('predictability','health','education','wellbeing','logicalthinking')),
+      content TEXT NOT NULL,
+      embedding TEXT NOT NULL,
+      source_chat_id INTEGER,
+      created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+    );
+  `);
+  db.exec(`CREATE INDEX IF NOT EXISTS idx_memories_subject ON memories(subject);`);
+
   return db;
 }
 
@@ -191,9 +210,101 @@ class ChatStore {
     return rows.slice(-limit);
   }
 
+  // --- Memory (manual, v1) --------------------------------------------
+
+  // Save a piece of text as a memory for a subject, with its embedding
+  // (an array of floats, already computed by the caller via Ollama).
+  // Stores its own copy of the content — see the note above the table
+  // definition for why source_chat_id is informational only.
+  saveMemory(subject, content, embedding, sourceChatId = null) {
+    this._assertSubject(subject);
+    const info = this.db
+      .prepare('INSERT INTO memories (subject, content, embedding, source_chat_id) VALUES (?, ?, ?, ?)')
+      .run(subject, content, JSON.stringify(embedding), sourceChatId);
+    return this.db.prepare('SELECT * FROM memories WHERE id = ?').get(info.lastInsertRowid);
+  }
+
+  listMemories(subject = null) {
+    if (subject) {
+      this._assertSubject(subject);
+      return this.db
+        .prepare('SELECT id, subject, content, source_chat_id, created_at FROM memories WHERE subject = ? ORDER BY created_at DESC')
+        .all(subject);
+    }
+    return this.db
+      .prepare('SELECT id, subject, content, source_chat_id, created_at FROM memories ORDER BY created_at DESC')
+      .all();
+  }
+
+  deleteMemory(id) {
+    this.db.prepare('DELETE FROM memories WHERE id = ?').run(id);
+  }
+
+  // Strictly same-subject only (NOT the access-matrix-expanded set that
+  // searchMemories uses) — used to guard against saving a near-duplicate
+  // within one subject's own bucket. A similar memory already existing
+  // in a linked subject should never block saving a new one here; that
+  // would conflate "can this subject read that memory" with "is this
+  // literally the same fact already stored," which are different
+  // questions.
+  findSimilarInSubject(subject, queryEmbedding, threshold = 0.95) {
+    this._assertSubject(subject);
+    const rows = this.db
+      .prepare('SELECT id, subject, content, embedding FROM memories WHERE subject = ?')
+      .all(subject);
+
+    let best = null;
+    for (const row of rows) {
+      const similarity = cosineSimilarity(queryEmbedding, JSON.parse(row.embedding));
+      if (similarity >= threshold && (!best || similarity > best.similarity)) {
+        best = { id: row.id, subject: row.subject, content: row.content, similarity };
+      }
+    }
+    return best;
+  }
+
+  // Find the most relevant memories for a subject (its own + whatever
+  // it's linked to read, same access matrix as getContext) given a
+  // query embedding. Brute-force cosine similarity in JS — fine at the
+  // scale a single person's memory store will ever reach, and avoids
+  // adding a native SQLite vector-search extension as a dependency.
+  searchMemories(subject, queryEmbedding, { topK = 4, threshold = 0.6 } = {}) {
+    this._assertSubject(subject);
+    const allowedSubjects = [subject, ...(CAN_READ[subject] || [])];
+    const placeholders = allowedSubjects.map(() => '?').join(',');
+    const rows = this.db
+      .prepare(`SELECT id, subject, content, embedding FROM memories WHERE subject IN (${placeholders})`)
+      .all(...allowedSubjects);
+
+    const scored = rows
+      .map((row) => ({
+        id: row.id,
+        subject: row.subject,
+        content: row.content,
+        similarity: cosineSimilarity(queryEmbedding, JSON.parse(row.embedding)),
+      }))
+      .filter((r) => r.similarity >= threshold)
+      .sort((a, b) => b.similarity - a.similarity)
+      .slice(0, topK);
+
+    return scored;
+  }
+
   close() {
     this.db.close();
   }
+}
+
+function cosineSimilarity(a, b) {
+  if (!a || !b || a.length !== b.length) return 0;
+  let dot = 0, normA = 0, normB = 0;
+  for (let i = 0; i < a.length; i++) {
+    dot += a[i] * b[i];
+    normA += a[i] * a[i];
+    normB += b[i] * b[i];
+  }
+  if (normA === 0 || normB === 0) return 0;
+  return dot / (Math.sqrt(normA) * Math.sqrt(normB));
 }
 
 module.exports = { ChatStore, SUBJECTS, CAN_READ };

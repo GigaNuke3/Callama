@@ -15,6 +15,10 @@ contextBridge.exposeInMainWorld('callama', {
   regenerate: (payload) => ipcRenderer.invoke('chat:regenerate', payload),
   stop: (chatId) => ipcRenderer.invoke('chat:stop', { chatId }),
 
+  saveMemory: (subject, content, chatId) => ipcRenderer.invoke('memory:save', { subject, content, chatId }),
+  listMemories: (subject) => ipcRenderer.invoke('memory:list', { subject }),
+  deleteMemory: (id) => ipcRenderer.invoke('memory:delete', { id }),
+
   onChunk: (callback) =>
     ipcRenderer.on('chat:chunk', (_event, data) => callback(data)),
   onDone: (callback) =>
