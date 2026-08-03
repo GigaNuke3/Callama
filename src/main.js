@@ -140,6 +140,13 @@ ipcMain.handle('chat:edit', async (event, { chatId, id, content, model, temperat
   return streamReply(event, chatId, model, temperature);
 });
 
+// Regenerate an assistant reply: delete it (and anything after it) and
+// stream a fresh answer using the same preceding user message.
+ipcMain.handle('chat:regenerate', async (event, { chatId, id, model, temperature }) => {
+  store.deleteFrom(chatId, id);
+  return streamReply(event, chatId, model, temperature);
+});
+
 // Tracks the in-flight AbortController for each chat that's currently
 // streaming a response, so a stop request can cancel the right one.
 const activeStreams = new Map();

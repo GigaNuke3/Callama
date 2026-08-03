@@ -150,17 +150,34 @@ class ChatStore {
     return this.db.prepare(`SELECT * FROM ${chat.subject} WHERE id = ?`).get(id);
   }
 
+  // Delete a message and everything after it in the same chat. Used to
+  // regenerate an assistant reply: the caller deletes from that reply's
+  // id onward (removing the stale answer, and any later turns if this
+  // wasn't actually the last message), then re-streams a fresh one —
+  // the preceding user message stays untouched, so it's re-used as-is.
+  deleteFrom(chatId, id) {
+    const chat = this._getChat(chatId);
+    this.db.prepare(`DELETE FROM ${chat.subject} WHERE chat_id = ? AND id >= ?`).run(chatId, id);
+  }
+
   // Build the context to send to Ollama for a given chat:
-  // - the chat's OWN messages (scoped to this chat_id only)
+  // - EVERYTHING in the chat's subject table, across ALL chats of that
+  //   subject — not just this one chat_id. Chats are organizational
+  //   folders/titles for browsing a subject's conversation history in
+  //   the sidebar; they are NOT isolated memory silos. A subject
+  //   remembers everything said to it, regardless of which chat window
+  //   you're currently looking at.
   // - plus, if the subject allows it, the most recent messages from
-  //   linked subjects, blended across ALL chats in those subjects
-  //   (not just one chat) — since a linked subject is a whole domain
-  //   of context, not a single conversation.
+  //   linked subjects, blended across ALL their chats too — since a
+  //   linked subject is a whole domain of context, not a single
+  //   conversation. (This was already how linked reads worked — the
+  //   bug was that OWN reads didn't follow the same rule, which made a
+  //   linked subject "remember" things a chat's own subject forgot.)
   getContext(chatId, { limit = 40 } = {}) {
     const chat = this._getChat(chatId);
     const own = this.db
-      .prepare(`SELECT id, role, content, created_at, '${chat.subject}' as source FROM ${chat.subject} WHERE chat_id = ?`)
-      .all(chatId);
+      .prepare(`SELECT id, role, content, created_at, '${chat.subject}' as source FROM ${chat.subject}`)
+      .all();
 
     const linkedSubjects = CAN_READ[chat.subject] || [];
     const linked = linkedSubjects.flatMap((subj) =>

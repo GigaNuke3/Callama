@@ -12,6 +12,7 @@ contextBridge.exposeInMainWorld('callama', {
   getHistory: (chatId) => ipcRenderer.invoke('chat:history', { chatId }),
   send: (payload) => ipcRenderer.invoke('chat:send', payload),
   edit: (payload) => ipcRenderer.invoke('chat:edit', payload),
+  regenerate: (payload) => ipcRenderer.invoke('chat:regenerate', payload),
   stop: (chatId) => ipcRenderer.invoke('chat:stop', { chatId }),
 
   onChunk: (callback) =>

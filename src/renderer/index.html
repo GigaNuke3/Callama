@@ -243,7 +243,7 @@ sendBtn.addEventListener('click', (e) => {
   }
 });
 
-function bubble(row) {
+function bubble(row, { isLastAssistant = false } = {}) {
   const isUser = row.role === 'user';
   const wrap = document.createElement('div');
   wrap.className = `chat ${isUser ? 'chat-end' : 'chat-start'} group`;
@@ -265,7 +265,30 @@ function bubble(row) {
     wrap.appendChild(footer);
   }
 
+  if (!isUser && isLastAssistant && row.id) {
+    const footer = document.createElement('div');
+    footer.className = 'chat-footer opacity-0 group-hover:opacity-100 text-[11px] text-base-content/40 cursor-pointer mt-0.5 transition-opacity';
+    footer.textContent = 'regenerate';
+    footer.addEventListener('click', () => regenerate(wrap, row));
+    wrap.appendChild(footer);
+  }
+
   return wrap;
+}
+
+async function regenerate(wrap, row) {
+  if (streamingChats.has(activeChatId)) return;
+  const chatId = activeChatId;
+  while (wrap.nextSibling) wrap.nextSibling.remove();
+  wrap.remove();
+  await window.callama.regenerate({
+    chatId,
+    id: row.id,
+    model: modelEl.value,
+    temperature: parseFloat(tempEl.value),
+  });
+  await refreshChatList();
+  await loadHistory();
 }
 
 function startEdit(wrap, contentEl, row) {
@@ -307,7 +330,11 @@ async function loadHistory() {
   historyEl.innerHTML = '';
   if (!activeChatId) return;
   const rows = await window.callama.getHistory(activeChatId);
-  for (const row of rows) historyEl.appendChild(bubble(row));
+  let lastAssistantIndex = -1;
+  rows.forEach((r, i) => { if (r.role === 'assistant') lastAssistantIndex = i; });
+  rows.forEach((row, i) => {
+    historyEl.appendChild(bubble(row, { isLastAssistant: i === lastAssistantIndex }));
+  });
   historyEl.scrollTop = historyEl.scrollHeight;
 }
 
