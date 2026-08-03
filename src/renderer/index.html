@@ -459,10 +459,15 @@ window.callama.onChunk(({ chatId, delta }) => {
   historyEl.scrollTop = historyEl.scrollHeight;
 });
 
-window.callama.onDone(async ({ chatId, stopped }) => {
+window.callama.onDone(async ({ chatId, stopped, timedOut }) => {
   streamingChats.delete(chatId);
   if (chatId === activeChatId) {
-    if (stopped && streamingBubble) {
+    if (timedOut) {
+      const notice = document.createElement('div');
+      notice.className = 'text-[11px] text-base-content/50 mt-1 mb-2';
+      notice.textContent = "No response after 90s — Ollama may be stuck. Try: ollama ps, and pkill ollama if something's wedged, then restart Callama.";
+      (streamingBubble ? streamingBubble.parentElement : historyEl).appendChild(notice);
+    } else if (stopped && streamingBubble) {
       const tag = document.createElement('div');
       tag.className = 'text-[11px] text-base-content/40 mt-1';
       tag.textContent = 'stopped';

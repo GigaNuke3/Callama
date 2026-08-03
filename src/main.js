@@ -56,20 +56,24 @@ const SUBJECT_PROMPTS = {
     "You're in the Predictability chat — everyday, general conversation. There's no strict focus here; answer naturally.",
   health:
     "You're in the Health chat — physical and mental health questions (medicine, exercise, neurological topics). " +
-    "If the user asks something unrelated to health or wellbeing, you can still answer briefly, but gently note it's outside " +
-    "this chat's focus and that a different subject chat (like Predictability) might serve them better going forward.",
+    "If the user says or asks something unrelated to health or wellbeing (a question, a remark, a comment — anything), " +
+    "you can still respond briefly, but gently note it's outside this chat's focus and that a different subject chat " +
+    "(like Predictability) might serve them better going forward.",
   wellbeing:
     "You're in the WellBeing chat — mental health, philosophy, and self-focus, distinct from clinical Health topics. " +
-    "If the user asks something unrelated, you can still answer briefly, but gently note it's outside this chat's focus " +
-    "and that a different subject chat (like Predictability) might serve them better going forward.",
+    "If the user says or asks something unrelated (a question, a remark, a comment — anything), you can still respond " +
+    "briefly, but gently note it's outside this chat's focus and that a different subject chat (like Predictability) " +
+    "might serve them better going forward.",
   education:
     "You're in the Education chat — creative writing and general knowledge/information. " +
-    "If the user asks something unrelated, you can still answer briefly, but gently note it's outside this chat's focus " +
-    "and that a different subject chat (like Predictability) might serve them better going forward.",
+    "If the user says or asks something unrelated (a question, a remark, a comment — anything), you can still respond " +
+    "briefly, but gently note it's outside this chat's focus and that a different subject chat (like Predictability) " +
+    "might serve them better going forward.",
   logicalthinking:
     "You're in the LogicalThinking chat — code, math, and engineering, analytical and rational reasoning. " +
-    "If the user asks something unrelated (e.g. casual or personal questions), you can still answer briefly, but gently note " +
-    "it's outside this chat's focus and that a different subject chat (like Predictability) might serve them better going forward.",
+    "If the user says or asks something unrelated (a question, a remark, a comment — anything, e.g. casual or personal " +
+    "topics), you can still respond briefly, but gently note it's outside this chat's focus and that a different " +
+    "subject chat (like Predictability) might serve them better going forward.",
 };
 
 let mainWindow;
@@ -114,12 +118,20 @@ ipcMain.handle('ollama:status', async () => ({ connected: await isOllamaReachabl
 // model degrades memory features silently rather than breaking chat.
 const EMBED_MODEL = 'nomic-embed-text';
 
-async function embed(text) {
+async function embed(text, signal) {
   try {
+    // 10s timeout — memory retrieval should never be able to hang the
+    // whole reply indefinitely. If it's slow or stuck, skip memory for
+    // this turn rather than blocking chat entirely. If an external
+    // signal (from the stop button) fires first, that takes priority.
+    const timeoutSignal = AbortSignal.timeout(10000);
+    const combinedSignal = signal ? AbortSignal.any([signal, timeoutSignal]) : timeoutSignal;
+
     const res = await fetch(`${OLLAMA_URL}/api/embeddings`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ model: EMBED_MODEL, prompt: text }),
+      signal: combinedSignal,
     });
     if (!res.ok) return null;
     const data = await res.json();
@@ -225,15 +237,24 @@ async function streamReply(event, chatId, model, temperature) {
   const chat = store.getChat(chatId);
   const context = store.getContext(chatId);
 
+  // Controller created FIRST, before anything that could hang (memory
+  // retrieval included) — so the stop button and edit-triggered
+  // regeneration can always interrupt this chat, no matter which phase
+  // it's currently in.
+  const controller = new AbortController();
+  activeStreams.set(chatId, controller);
+
   const messages = [{ role: 'system', content: SUBJECT_PROMPTS[chat.subject] }];
 
   // Memory retrieval: embed the most recent message (the thing that
   // triggered this reply) and pull in whatever's actually relevant from
   // this subject's memory store, regardless of how long ago it was
   // saved or whether it's still within the recent-messages window.
+  // embed() has its own 10s timeout and honors this same controller, so
+  // it can never hang the whole reply indefinitely.
   const latest = context[context.length - 1];
   if (latest) {
-    const queryEmbedding = await embed(latest.content);
+    const queryEmbedding = await embed(latest.content, controller.signal);
     if (queryEmbedding) {
       const memories = store.searchMemories(chat.subject, queryEmbedding);
       if (memories.length > 0) {
@@ -248,24 +269,42 @@ async function streamReply(event, chatId, model, temperature) {
 
   messages.push(...context.map((m) => ({ role: m.role, content: m.content })));
 
-  const controller = new AbortController();
-  activeStreams.set(chatId, controller);
-
   let full = '';
   let stopped = false;
+  let timedOut = false;
+
+  // Separate, short-lived controller just for "did Ollama even start
+  // responding at all." If headers never arrive within 90s, something
+  // is genuinely stuck (e.g. Ollama's generation queue wedged behind an
+  // old request) and we should surface that instead of waiting forever
+  // with no feedback. Once headers DO arrive, this timer is cleared —
+  // it must never be able to kill a response that's actively streaming,
+  // just slow. The user's own controller (Stop button) stays active for
+  // the whole request regardless, including mid-stream.
+  const headersTimeoutController = new AbortController();
+  const headersTimeoutId = setTimeout(() => headersTimeoutController.abort(), 90000);
+  const fetchSignal = AbortSignal.any([controller.signal, headersTimeoutController.signal]);
 
   try {
-    const res = await fetch(`${OLLAMA_URL}/api/chat`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        model: model || 'llama3.2:3b',
-        messages,
-        stream: true,
-        options: { temperature: temperature ?? 0.7 },
-      }),
-      signal: controller.signal,
-    });
+    let res;
+    try {
+      res = await fetch(`${OLLAMA_URL}/api/chat`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          model: model || 'llama3.2:3b',
+          messages,
+          stream: true,
+          options: { temperature: temperature ?? 0.7 },
+        }),
+        signal: fetchSignal,
+      });
+    } finally {
+      // Headers arrived (or the request already failed) — either way,
+      // the "never responded at all" window is over. Stop that timer so
+      // it can't fire later and kill an in-progress stream.
+      clearTimeout(headersTimeoutId);
+    }
 
     if (!res.ok || !res.body) {
       throw new Error(`Ollama request failed: ${res.status} ${res.statusText}`);
@@ -295,6 +334,7 @@ async function streamReply(event, chatId, model, temperature) {
   } catch (err) {
     if (err.name === 'AbortError') {
       stopped = true;
+      timedOut = headersTimeoutController.signal.aborted;
     } else {
       throw err;
     }
@@ -302,13 +342,14 @@ async function streamReply(event, chatId, model, temperature) {
     activeStreams.delete(chatId);
   }
 
-  // Nothing generated yet (stopped instantly) — don't save an empty message.
+  // Nothing generated yet (stopped instantly, or timed out before Ollama
+  // ever responded) — don't save an empty message.
   if (!full.trim()) {
-    event.sender.send('chat:done', { chatId, message: null, stopped });
+    event.sender.send('chat:done', { chatId, message: null, stopped, timedOut });
     return null;
   }
 
   const saved = store.addMessage(chatId, 'assistant', full);
-  event.sender.send('chat:done', { chatId, message: saved, stopped });
+  event.sender.send('chat:done', { chatId, message: saved, stopped, timedOut });
   return saved;
 }
