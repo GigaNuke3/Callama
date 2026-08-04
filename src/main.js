@@ -197,18 +197,62 @@ ipcMain.handle('chats:delete', (_event, { chatId }) => {
 
 ipcMain.handle('chat:history', (_event, { chatId }) => store.getHistory(chatId));
 
+// Global generation queue: at most ONE Ollama request (embed + chat) is
+// ever in flight across the whole app, no matter how many chats exist
+// or how quickly you switch between them. Without this, creating chat
+// after chat and sending messages before earlier ones finish queues up
+// multiple concurrent requests — Ollama (especially CPU-only, one
+// generation at a time) processes them one by one regardless, so a
+// later chat can end up waiting minutes just for its TURN, which looks
+// identical to "stuck" even though nothing is actually broken. This
+// makes that queueing explicit and visible instead of silent.
+let generationQueue = Promise.resolve();
+let queueLength = 0;
+function enqueueGeneration(task, label) {
+  queueLength++;
+  console.log(`[queue] enqueued "${label}" — ${queueLength} waiting`);
+  const run = generationQueue.then(
+    async () => {
+      console.log(`[queue] STARTING "${label}"`);
+      try {
+        const result = await task();
+        console.log(`[queue] FINISHED "${label}" successfully`);
+        return result;
+      } catch (err) {
+        console.log(`[queue] FAILED "${label}":`, err.message);
+        throw err;
+      } finally {
+        queueLength--;
+      }
+    },
+    async (err) => {
+      // previous task in the chain rejected — log it, then still run this one
+      console.log(`[queue] (previous task in chain had rejected: ${err?.message}) — STARTING "${label}" anyway`);
+      try {
+        const result = await task();
+        console.log(`[queue] FINISHED "${label}" successfully`);
+        return result;
+      } finally {
+        queueLength--;
+      }
+    }
+  );
+  generationQueue = run.then(() => {}, () => {}); // never let one failure break the chain
+  return run;
+}
+
 // Edit a past user message: truncate everything after it, then
 // regenerate the assistant's reply from the edited point forward.
 ipcMain.handle('chat:edit', async (event, { chatId, id, content, model, temperature }) => {
   store.editMessage(chatId, id, content);
-  return streamReply(event, chatId, model, temperature);
+  return enqueueGeneration(() => streamReply(event, chatId, model, temperature), `edit chat=${chatId} msg=${id}`);
 });
 
 // Regenerate an assistant reply: delete it (and anything after it) and
 // stream a fresh answer using the same preceding user message.
 ipcMain.handle('chat:regenerate', async (event, { chatId, id, model, temperature }) => {
   store.deleteFrom(chatId, id);
-  return streamReply(event, chatId, model, temperature);
+  return enqueueGeneration(() => streamReply(event, chatId, model, temperature), `regenerate chat=${chatId} msg=${id}`);
 });
 
 // Tracks the in-flight AbortController for each chat that's currently
@@ -224,7 +268,7 @@ ipcMain.handle('chat:stop', (_event, { chatId }) => {
 // Send a new user message and stream back the assistant's reply.
 ipcMain.handle('chat:send', async (event, { chatId, content, model, temperature }) => {
   store.addMessage(chatId, 'user', content);
-  return streamReply(event, chatId, model, temperature);
+  return enqueueGeneration(() => streamReply(event, chatId, model, temperature), `send chat=${chatId}`);
 });
 
 // Shared streaming logic: builds context (own chat + linked subjects
@@ -234,6 +278,7 @@ ipcMain.handle('chat:send', async (event, { chatId, content, model, temperature 
 // generated so far is still saved — a partial answer is more useful
 // than losing the response entirely.
 async function streamReply(event, chatId, model, temperature) {
+  console.log(`[streamReply] chat=${chatId} — START`);
   const chat = store.getChat(chatId);
   const context = store.getContext(chatId);
 
@@ -254,7 +299,9 @@ async function streamReply(event, chatId, model, temperature) {
   // it can never hang the whole reply indefinitely.
   const latest = context[context.length - 1];
   if (latest) {
+    console.log(`[streamReply] chat=${chatId} — embedding for memory retrieval...`);
     const queryEmbedding = await embed(latest.content, controller.signal);
+    console.log(`[streamReply] chat=${chatId} — embedding ${queryEmbedding ? 'succeeded' : 'unavailable/skipped'}`);
     if (queryEmbedding) {
       const memories = store.searchMemories(chat.subject, queryEmbedding);
       if (memories.length > 0) {
@@ -268,6 +315,7 @@ async function streamReply(event, chatId, model, temperature) {
   }
 
   messages.push(...context.map((m) => ({ role: m.role, content: m.content })));
+  console.log(`[streamReply] chat=${chatId} — sending request to Ollama, ${messages.length} messages`);
 
   let full = '';
   let stopped = false;
@@ -307,15 +355,45 @@ async function streamReply(event, chatId, model, temperature) {
     }
 
     if (!res.ok || !res.body) {
+      console.log(`[streamReply] chat=${chatId} — bad response: ${res.status} ${res.statusText}`);
       throw new Error(`Ollama request failed: ${res.status} ${res.statusText}`);
     }
+    console.log(`[streamReply] chat=${chatId} — headers received (${res.status}), starting to read body`);
 
     const reader = res.body.getReader();
     const decoder = new TextDecoder();
     let buffer = '';
+    let chunkCount = 0;
 
+    // Idle-body watchdog: the headers-only timeout above only covers
+    // "did Ollama respond at all" — a stuck generation worker can still
+    // send headers instantly and then never write a single byte to the
+    // body, which the headers timeout can't catch (it's already been
+    // cleared by then). This protects THAT phase: if no new chunk
+    // arrives within 60s, treat it as stuck and cancel the reader.
+    // Resets on every chunk received, so a response that's merely slow
+    // — but actually producing tokens — is never killed by this.
+    const IDLE_MS = 60000;
     while (true) {
-      const { done, value } = await reader.read();
+      let idleTimedOut = false;
+      const idleTimer = setTimeout(() => {
+        idleTimedOut = true;
+        reader.cancel().catch(() => {});
+      }, IDLE_MS);
+
+      let result;
+      try {
+        result = await reader.read();
+      } finally {
+        clearTimeout(idleTimer);
+      }
+
+      if (idleTimedOut) {
+        timedOut = true;
+        break;
+      }
+
+      const { done, value } = result;
       if (done) break;
 
       buffer += decoder.decode(value, { stream: true });
@@ -326,12 +404,16 @@ async function streamReply(event, chatId, model, temperature) {
         if (!line.trim()) continue;
         const chunk = JSON.parse(line);
         if (chunk.message?.content) {
+          chunkCount++;
+          if (chunkCount === 1) console.log(`[streamReply] chat=${chatId} — first chunk received`);
           full += chunk.message.content;
           event.sender.send('chat:chunk', { chatId, delta: chunk.message.content });
         }
       }
     }
+    console.log(`[streamReply] chat=${chatId} — read loop ended, ${chunkCount} chunks, ${full.length} chars`);
   } catch (err) {
+    console.log(`[streamReply] chat=${chatId} — EXCEPTION: ${err.name} — ${err.message}`);
     if (err.name === 'AbortError') {
       stopped = true;
       timedOut = headersTimeoutController.signal.aborted;
@@ -345,11 +427,13 @@ async function streamReply(event, chatId, model, temperature) {
   // Nothing generated yet (stopped instantly, or timed out before Ollama
   // ever responded) — don't save an empty message.
   if (!full.trim()) {
+    console.log(`[streamReply] chat=${chatId} — DONE, empty result (stopped=${stopped}, timedOut=${timedOut})`);
     event.sender.send('chat:done', { chatId, message: null, stopped, timedOut });
     return null;
   }
 
   const saved = store.addMessage(chatId, 'assistant', full);
+  console.log(`[streamReply] chat=${chatId} — DONE, saved reply (${full.length} chars)`);
   event.sender.send('chat:done', { chatId, message: saved, stopped, timedOut });
   return saved;
 }

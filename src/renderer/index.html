@@ -365,6 +365,8 @@ async function regenerate(wrap, row) {
   const chatId = activeChatId;
   while (wrap.nextSibling) wrap.nextSibling.remove();
   wrap.remove();
+  streamingChats.add(chatId);
+  updateSendButton();
   await window.callama.regenerate({
     chatId,
     id: row.id,
@@ -387,6 +389,8 @@ function startEdit(wrap, contentEl, row) {
     if (!newContent || newContent === row.content) { loadHistory(); return; }
     while (wrap.nextSibling) wrap.nextSibling.remove();
     textarea.replaceWith(bubbleContentOnly(newContent));
+    streamingChats.add(activeChatId);
+    updateSendButton();
     await window.callama.edit({
       chatId: activeChatId,
       id: row.id,
@@ -465,7 +469,7 @@ window.callama.onDone(async ({ chatId, stopped, timedOut }) => {
     if (timedOut) {
       const notice = document.createElement('div');
       notice.className = 'text-[11px] text-base-content/50 mt-1 mb-2';
-      notice.textContent = "No response after 90s — Ollama may be stuck. Try: ollama ps, and pkill ollama if something's wedged, then restart Callama.";
+      notice.textContent = "No response — Ollama's generation queue may be stuck. Try: ollama ps, and pkill ollama if something's wedged, then restart Callama.";
       (streamingBubble ? streamingBubble.parentElement : historyEl).appendChild(notice);
     } else if (stopped && streamingBubble) {
       const tag = document.createElement('div');
@@ -487,6 +491,8 @@ formEl.addEventListener('submit', async (e) => {
   inputEl.value = '';
   historyEl.appendChild(bubble({ role: 'user', content, id: null }));
   historyEl.scrollTop = historyEl.scrollHeight;
+  streamingChats.add(activeChatId);
+  updateSendButton();
   await window.callama.send({
     chatId: activeChatId,
     content,
