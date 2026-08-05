@@ -315,7 +315,9 @@ async function streamReply(event, chatId, model, temperature) {
   }
 
   messages.push(...context.map((m) => ({ role: m.role, content: m.content })));
-  console.log(`[streamReply] chat=${chatId} — sending request to Ollama, ${messages.length} messages`);
+  const totalChars = messages.reduce((sum, m) => sum + m.content.length, 0);
+  console.log(`[streamReply] chat=${chatId} — sending request to Ollama: model=${model || 'llama3.2:3b'}, ${messages.length} messages, ${totalChars} total chars`);
+  console.log(`[streamReply] chat=${chatId} — role sequence: ${messages.map((m) => m.role).join(',')}`);
 
   let full = '';
   let stopped = false;
@@ -409,6 +411,15 @@ async function streamReply(event, chatId, model, temperature) {
           full += chunk.message.content;
           event.sender.send('chat:chunk', { chatId, delta: chunk.message.content });
         }
+        // Ollama's final chunk carries real diagnostic data — how many
+        // tokens the PROMPT actually consumed, how many were generated,
+        // and WHY it stopped. This tells us definitively whether this
+        // is a context-overflow problem (prompt_eval_count near the
+        // model's real limit, eval_count near 0) rather than guessing
+        // from raw character counts, which are only ever an estimate.
+        if (chunk.done) {
+          console.log(`[streamReply] chat=${chatId} — Ollama diagnostics: done_reason=${chunk.done_reason}, prompt_eval_count=${chunk.prompt_eval_count}, eval_count=${chunk.eval_count}`);
+        }
       }
     }
     console.log(`[streamReply] chat=${chatId} — read loop ended, ${chunkCount} chunks, ${full.length} chars`);
@@ -424,12 +435,26 @@ async function streamReply(event, chatId, model, temperature) {
     activeStreams.delete(chatId);
   }
 
-  // Nothing generated yet (stopped instantly, or timed out before Ollama
-  // ever responded) — don't save an empty message.
+  // Nothing generated — whether from a genuine stop, a timeout, or the
+  // model itself producing an empty reply (the exact pattern we're
+  // chasing: eval_count=1, near-instant, no real content). In ALL of
+  // these cases, save a short placeholder rather than leaving the
+  // user's message unanswered. Reason: "chats share memory within a
+  // subject" means every subsequent chat in this subject blends in
+  // this same history — an orphaned user message with no reply breaks
+  // the normal user/assistant alternation for every chat that reads
+  // from this subject afterward, which smaller models can respond to
+  // very badly (including generating their own near-instant empty
+  // replies). This keeps the conversation structurally valid regardless
+  // of what caused the original failure.
   if (!full.trim()) {
-    console.log(`[streamReply] chat=${chatId} — DONE, empty result (stopped=${stopped}, timedOut=${timedOut})`);
-    event.sender.send('chat:done', { chatId, message: null, stopped, timedOut });
-    return null;
+    const reason = stopped && !timedOut ? 'stopped by user before any response was generated'
+      : timedOut ? 'no response — Ollama did not reply in time'
+      : 'no response was generated';
+    console.log(`[streamReply] chat=${chatId} — DONE, empty result (${reason}) — saving placeholder to avoid poisoning future context`);
+    const saved = store.addMessage(chatId, 'assistant', `[${reason}]`);
+    event.sender.send('chat:done', { chatId, message: saved, stopped, timedOut });
+    return saved;
   }
 
   const saved = store.addMessage(chatId, 'assistant', full);

@@ -179,24 +179,42 @@ class ChatStore {
     this.db.prepare(`DELETE FROM ${chat.subject} WHERE chat_id = ? AND id >= ?`).run(chatId, id);
   }
 
-  // Build the context to send to Ollama for a given chat:
-  // - EVERYTHING in the chat's subject table, across ALL chats of that
-  //   subject — not just this one chat_id. Chats are organizational
-  //   folders/titles for browsing a subject's conversation history in
-  //   the sidebar; they are NOT isolated memory silos. A subject
-  //   remembers everything said to it, regardless of which chat window
-  //   you're currently looking at.
-  // - plus, if the subject allows it, the most recent messages from
-  //   linked subjects, blended across ALL their chats too — since a
-  //   linked subject is a whole domain of context, not a single
-  //   conversation. (This was already how linked reads worked — the
-  //   bug was that OWN reads didn't follow the same rule, which made a
-  //   linked subject "remember" things a chat's own subject forgot.)
-  getContext(chatId, { limit = 40 } = {}) {
+  // Build the context to send to Ollama for a given chat.
+  //
+  // CRITICAL GUARANTEE: this chat's OWN messages — especially the one
+  // that just triggered this request — are ALWAYS included, no matter
+  // what. Reason this matters: when several chats in the same subject
+  // are fired off rapidly, their user messages all land in the
+  // database within milliseconds of each other, but replies trickle in
+  // one at a time and can take real seconds to generate. That means a
+  // DIFFERENT chat's reply can end up with a LATER timestamp than THIS
+  // chat's own question — so a naive "keep whatever's most recent"
+  // trim can bump this chat's own question out of its own context
+  // entirely, leaving the model nothing to actually respond to (which
+  // is exactly what happened: role sequences ending in "...,assistant"
+  // with no user turn at all, and eval_count=1 every time). Recency is
+  // the wrong priority for OWN messages — relevance to this specific
+  // request is.
+  //
+  // So: this chat's own thread is reserved first, unconditionally.
+  // Whatever budget is left over (message-count AND character caps)
+  // gets filled with the rest of the subject's history plus linked
+  // subjects, most-recent-first — same "chats share memory within a
+  // subject" behavior as before, just no longer able to crowd out the
+  // one thing that must never be dropped.
+  getContext(chatId, { limit = 40, maxChars = 3000 } = {}) {
     const chat = this._getChat(chatId);
-    const own = this.db
+
+    const ownChat = this.db
+      .prepare(`SELECT id, role, content, created_at, '${chat.subject}' as source FROM ${chat.subject} WHERE chat_id = ? ORDER BY id ASC`)
+      .all(chatId);
+    const ownChatIds = new Set(ownChat.map((r) => r.id));
+    const ownChatChars = ownChat.reduce((sum, r) => sum + r.content.length, 0);
+
+    const restOwnSubject = this.db
       .prepare(`SELECT id, role, content, created_at, '${chat.subject}' as source FROM ${chat.subject}`)
-      .all();
+      .all()
+      .filter((r) => !ownChatIds.has(r.id)); // exclude what's already guaranteed above
 
     const linkedSubjects = CAN_READ[chat.subject] || [];
     const linked = linkedSubjects.flatMap((subj) =>
@@ -205,9 +223,38 @@ class ChatStore {
         .all()
     );
 
-    const rows = [...own, ...linked];
-    rows.sort((a, b) => a.created_at.localeCompare(b.created_at));
-    return rows.slice(-limit);
+    const rest = [...restOwnSubject, ...linked];
+    rest.sort((a, b) => a.created_at.localeCompare(b.created_at));
+
+    // Whatever's left of the budget after reserving this chat's own
+    // thread, in full, goes to the rest — same backward-walk trim as
+    // before, just operating on a smaller remaining allowance.
+    const remainingSlots = Math.max(0, limit - ownChat.length);
+    const remainingChars = Math.max(0, maxChars - ownChatChars);
+    const recentRest = rest.slice(-remainingSlots);
+
+    let totalChars = 0;
+    let startIndex = recentRest.length;
+    for (let i = recentRest.length - 1; i >= 0; i--) {
+      const len = recentRest[i].content.length;
+      if (totalChars + len > remainingChars && startIndex !== recentRest.length) break;
+      totalChars += len;
+      startIndex = i;
+    }
+    const trimmedRest = recentRest.slice(startIndex);
+
+    // NOTE: deliberately NOT re-sorting the combined array by created_at
+    // here. That was the actual remaining bug — even with ownChat
+    // guaranteed to be INCLUDED, a global timestamp sort could still
+    // place another chat's later-arriving reply AFTER this chat's own
+    // (earlier-timestamped) question, ending the array on the wrong
+    // thing again. "Background" context (trimmedRest) always comes
+    // first, chronologically ordered among itself; THIS chat's own
+    // thread (ownChat) always comes last, chronologically ordered among
+    // itself — so the array reliably ends on what the model actually
+    // needs to respond to, regardless of real-world timing races
+    // between chats.
+    return [...trimmedRest, ...ownChat];
   }
 
   // --- Memory (manual, v1) --------------------------------------------
