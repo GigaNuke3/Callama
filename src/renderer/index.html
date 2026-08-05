@@ -42,7 +42,12 @@
         </div>
       </div>
 
-      <div class="text-[10px] font-display uppercase tracking-widest text-base-content/40 px-1 mt-1">chats</div>
+      <input
+        id="chat-search"
+        type="text"
+        placeholder="search chats..."
+        class="input input-sm input-bordered w-full mt-1"
+      />
       <div id="chat-list" class="flex-1 overflow-y-auto flex flex-col gap-0.5 -mx-1 px-1"></div>
 
       <div class="flex flex-col gap-3 border-t border-base-300 pt-3">
@@ -207,10 +212,47 @@ newChatConfirm.addEventListener('click', async () => {
   await setActiveChat(chat.id);
 });
 
+let searchTerm = '';
+const chatSearchEl = document.getElementById('chat-search');
+chatSearchEl.addEventListener('input', () => {
+  searchTerm = chatSearchEl.value;
+  renderChatList();
+});
+
 async function refreshChatList() {
   chats = await window.callama.listChats();
+  renderChatList();
+}
+
+function renderChatList() {
   chatListEl.innerHTML = '';
-  for (const chat of chats) chatListEl.appendChild(chatListItem(chat));
+  const term = searchTerm.trim().toLowerCase();
+  const visible = term ? chats.filter((c) => c.title.toLowerCase().includes(term)) : chats;
+  const pinned = visible.filter((c) => c.pinned);
+  const unpinned = visible.filter((c) => !c.pinned);
+
+  if (pinned.length > 0) {
+    chatListEl.appendChild(sectionLabel('pinned'));
+    for (const chat of pinned) chatListEl.appendChild(chatListItem(chat));
+  }
+  if (pinned.length > 0 && unpinned.length > 0) {
+    chatListEl.appendChild(sectionLabel('chats'));
+  }
+  for (const chat of unpinned) chatListEl.appendChild(chatListItem(chat));
+
+  if (visible.length === 0) {
+    const empty = document.createElement('p');
+    empty.className = 'text-[12px] text-base-content/40 px-1 mt-2';
+    empty.textContent = term ? 'No chats match your search.' : 'No chats yet.';
+    chatListEl.appendChild(empty);
+  }
+}
+
+function sectionLabel(text) {
+  const el = document.createElement('div');
+  el.className = 'text-[10px] font-display uppercase tracking-widest text-base-content/40 px-1 mt-2 mb-0.5';
+  el.textContent = text;
+  return el;
 }
 
 function chatListItem(chat) {
@@ -229,11 +271,21 @@ function chatListItem(chat) {
   subjectTag.textContent = chat.subject.slice(0, 4);
   row.appendChild(subjectTag);
 
+  const pinBtn = iconBtn('pin', chat.pinned);
   const editBtn = iconBtn('rename');
   const delBtn = iconBtn('delete');
+  // A pinned chat's pin action stays visible always (so you can find
+  // your way back to unpin it without having to hover first); rename
+  // and delete stay hover-only either way to keep the row uncluttered.
+  if (!chat.pinned) pinBtn.classList.add('opacity-0', 'group-hover:opacity-100');
   editBtn.classList.add('opacity-0', 'group-hover:opacity-100');
   delBtn.classList.add('opacity-0', 'group-hover:opacity-100');
 
+  pinBtn.addEventListener('click', async (e) => {
+    e.stopPropagation();
+    await window.callama.setPinned(chat.id, !chat.pinned);
+    await refreshChatList();
+  });
   editBtn.addEventListener('click', (e) => { e.stopPropagation(); renameChatInline(row, chat, title); });
   delBtn.addEventListener('click', async (e) => {
     e.stopPropagation();
@@ -244,17 +296,19 @@ function chatListItem(chat) {
     else if (!chats.length) { titleEl.textContent = ''; descEl.textContent = ''; historyEl.innerHTML = ''; }
   });
 
+  row.appendChild(pinBtn);
   row.appendChild(editBtn);
   row.appendChild(delBtn);
   row.addEventListener('click', () => setActiveChat(chat.id));
   return row;
 }
 
-function iconBtn(kind) {
+function iconBtn(kind, active = false) {
   const btn = document.createElement('button');
-  btn.className = 'shrink-0 text-[11px] text-base-content/50 hover:text-base-content px-1 transition-opacity';
-  btn.textContent = kind === 'rename' ? '✎' : '×';
-  btn.title = kind === 'rename' ? 'Rename' : 'Delete';
+  btn.className = 'shrink-0 text-[11px] px-1 transition-opacity ' +
+    (active ? 'text-base-content' : 'text-base-content/50 hover:text-base-content');
+  btn.textContent = kind === 'rename' ? '✎' : kind === 'pin' ? (active ? '◆' : '◇') : '×';
+  btn.title = kind === 'rename' ? 'Rename' : kind === 'pin' ? (active ? 'Unpin' : 'Pin') : 'Delete';
   return btn;
 }
 
@@ -447,6 +501,7 @@ window.callama.onChunk(({ chatId, delta }) => {
   if (!streamingChats.has(chatId)) {
     streamingChats.add(chatId);
     if (chatId === activeChatId) updateSendButton();
+    refreshChatList(); // fire-and-forget — picks up an auto-generated title promptly rather than only after the full response finishes
   }
   if (chatId !== activeChatId) return;
   if (!streamingBubble) {

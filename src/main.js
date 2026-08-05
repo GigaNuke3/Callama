@@ -190,6 +190,8 @@ ipcMain.handle('chats:create', (_event, { subject }) => {
 
 ipcMain.handle('chats:rename', (_event, { chatId, title }) => store.renameChat(chatId, title));
 
+ipcMain.handle('chats:setPinned', (_event, { chatId, pinned }) => store.setPinned(chatId, pinned));
+
 ipcMain.handle('chats:delete', (_event, { chatId }) => {
   store.deleteChat(chatId);
   return { chatId };
@@ -265,9 +267,30 @@ ipcMain.handle('chat:stop', (_event, { chatId }) => {
   return { stopped: !!controller };
 });
 
+// Turns a message into a short chat title: collapse whitespace, cap
+// at ~48 chars, and prefer breaking on a word boundary rather than
+// mid-word when truncating.
+function generateTitle(content) {
+  const clean = content.replace(/\s+/g, ' ').trim();
+  if (clean.length <= 48) return clean || 'New chat';
+  let truncated = clean.slice(0, 48);
+  const lastSpace = truncated.lastIndexOf(' ');
+  if (lastSpace > 20) truncated = truncated.slice(0, lastSpace);
+  return truncated + '…';
+}
+
 // Send a new user message and stream back the assistant's reply.
 ipcMain.handle('chat:send', async (event, { chatId, content, model, temperature }) => {
   store.addMessage(chatId, 'user', content);
+
+  // Auto-rename: only on this chat's actual first message, and only if
+  // it still has the default title (so a user's own rename is never
+  // silently overwritten by a later message in the same chat).
+  const chat = store.getChat(chatId);
+  if (chat.title === 'New chat' && store.getHistory(chatId).length === 1) {
+    store.renameChat(chatId, generateTitle(content));
+  }
+
   return enqueueGeneration(() => streamReply(event, chatId, model, temperature), `send chat=${chatId}`);
 });
 

@@ -7,6 +7,7 @@ contextBridge.exposeInMainWorld('callama', {
   listChats: () => ipcRenderer.invoke('chats:list'),
   createChat: (subject) => ipcRenderer.invoke('chats:create', { subject }),
   renameChat: (chatId, title) => ipcRenderer.invoke('chats:rename', { chatId, title }),
+  setPinned: (chatId, pinned) => ipcRenderer.invoke('chats:setPinned', { chatId, pinned }),
   deleteChat: (chatId) => ipcRenderer.invoke('chats:delete', { chatId }),
 
   getHistory: (chatId) => ipcRenderer.invoke('chat:history', { chatId }),

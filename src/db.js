@@ -29,10 +29,19 @@ function openDatabase(dbPath) {
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       subject TEXT NOT NULL CHECK (subject IN ('predictability','health','education','wellbeing','logicalthinking')),
       title TEXT NOT NULL DEFAULT 'New chat',
+      pinned INTEGER NOT NULL DEFAULT 0,
       created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
       updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
     );
   `);
+  // Migration for databases created before "pinned" existed — CREATE
+  // TABLE IF NOT EXISTS above won't add a column to an already-existing
+  // table. Harmless no-op (caught and ignored) on a fresh database.
+  try {
+    db.exec(`ALTER TABLE chats ADD COLUMN pinned INTEGER NOT NULL DEFAULT 0`);
+  } catch {
+    // column already exists — fine
+  }
 
   // Each subject table now scopes its rows to a specific chat via
   // chat_id. ON DELETE CASCADE means deleting a chat row automatically
@@ -111,11 +120,16 @@ class ChatStore {
   }
 
   listChats() {
-    return this.db.prepare('SELECT * FROM chats ORDER BY updated_at DESC').all();
+    return this.db.prepare('SELECT * FROM chats ORDER BY pinned DESC, updated_at DESC').all();
   }
 
   renameChat(chatId, title) {
     this.db.prepare('UPDATE chats SET title = ? WHERE id = ?').run(title, chatId);
+    return this._getChat(chatId);
+  }
+
+  setPinned(chatId, pinned) {
+    this.db.prepare('UPDATE chats SET pinned = ? WHERE id = ?').run(pinned ? 1 : 0, chatId);
     return this._getChat(chatId);
   }
 
