@@ -52,8 +52,30 @@
 
       <div class="flex flex-col gap-3 border-t border-base-300 pt-3">
         <div>
-          <label class="text-[10px] font-display uppercase tracking-widest text-base-content/40">model</label>
+          <div class="flex items-center justify-between">
+            <label class="text-[10px] font-display uppercase tracking-widest text-base-content/40">model</label>
+            <button id="refresh-models-btn" class="text-[10px] text-base-content/40 hover:text-base-content font-display" title="Refresh model list">
+              refresh
+            </button>
+          </div>
           <select id="model" class="select select-sm select-bordered w-full mt-1"></select>
+
+          <div class="flex gap-1 mt-2">
+            <h6>
+            <input
+              id="pull-model-input"
+              type="text"
+              placeholder="paste a model name to download..."
+              class="input input-xs input-bordered flex-1"
+            /></h6>
+            <button id="pull-model-btn" class="btn btn-xs font-display normal-case">pull</button>
+          </div>
+          <div id="pull-progress-wrap" class="hidden mt-1.5">
+            <div class="text-[10px] text-base-content/50" id="pull-status-text"></div>
+            <div class="w-full h-1 bg-base-300 rounded-full mt-1 overflow-hidden">
+              <div id="pull-progress-bar" class="h-full bg-base-content" style="width: 0%"></div>
+            </div>
+          </div>
         </div>
         <div>
           <label class="text-[10px] font-display uppercase tracking-widest text-base-content/40">
@@ -489,13 +511,74 @@ async function checkOllamaStatus() {
 }
 
 async function loadModels() {
+  const previousSelection = modelEl.value;
   try {
     const models = await window.callama.listModels();
     modelEl.innerHTML = models.map((m) => `<option value="${m}">${m}</option>`).join('');
+    // Keep whatever was selected before, if it's still in the list —
+    // a refresh shouldn't silently switch your model out from under you.
+    if (models.includes(previousSelection)) modelEl.value = previousSelection;
   } catch (e) {
     modelEl.innerHTML = '<option value="llama3.2:3b">llama3.2:3b (offline)</option>';
   }
 }
+
+const refreshModelsBtn = document.getElementById('refresh-models-btn');
+refreshModelsBtn.addEventListener('click', async () => {
+  refreshModelsBtn.textContent = '...';
+  await loadModels();
+  refreshModelsBtn.textContent = 'refresh';
+});
+
+const pullInput = document.getElementById('pull-model-input');
+const pullBtn = document.getElementById('pull-model-btn');
+const pullProgressWrap = document.getElementById('pull-progress-wrap');
+const pullStatusText = document.getElementById('pull-status-text');
+const pullProgressBar = document.getElementById('pull-progress-bar');
+
+window.callama.onPullProgress(({ status, completed, total }) => {
+  pullProgressWrap.classList.remove('hidden');
+  if (completed != null && total != null && total > 0) {
+    const pct = Math.round((completed / total) * 100);
+    pullProgressBar.style.width = pct + '%';
+    const mb = (n) => (n / 1_000_000).toFixed(0);
+    pullStatusText.textContent = `${status} — ${pct}% (${mb(completed)} MB / ${mb(total)} MB)`;
+  } else {
+    // Steps like "pulling manifest" or "verifying digest" carry no
+    // byte progress — keep the bar where it was, just update the label.
+    pullStatusText.textContent = status;
+  }
+});
+
+pullBtn.addEventListener('click', async () => {
+  const name = pullInput.value.trim();
+  if (!name) return;
+  pullBtn.disabled = true;
+  pullInput.disabled = true;
+  pullProgressWrap.classList.remove('hidden');
+  pullProgressBar.style.width = '0%';
+  pullStatusText.textContent = 'starting...';
+
+  const result = await window.callama.pullModel(name);
+
+  pullBtn.disabled = false;
+  pullInput.disabled = false;
+
+  if (result.ok) {
+    pullStatusText.textContent = `"${name}" downloaded successfully.`;
+    pullProgressBar.style.width = '100%';
+    pullInput.value = '';
+    await loadModels();
+    setTimeout(() => pullProgressWrap.classList.add('hidden'), 3000);
+  } else {
+    pullStatusText.textContent = `Failed: ${result.error}`;
+    pullProgressBar.style.width = '0%';
+  }
+});
+
+pullInput.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') { e.preventDefault(); pullBtn.click(); }
+});
 
 window.callama.onChunk(({ chatId, delta }) => {
   if (!streamingChats.has(chatId)) {

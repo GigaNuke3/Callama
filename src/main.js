@@ -154,6 +154,69 @@ ipcMain.handle('models:list', async () => {
     .filter((name) => name !== EMBED_MODEL && !name.toLowerCase().includes('embed'));
 });
 
+// Downloads a model via Ollama's own /api/pull — a real, official,
+// stable local endpoint, not a scrape of any website. The user
+// supplies the model name themselves (copied from browsing
+// ollama.com's library in their own browser); Callama's only job is
+// to hand that name to Ollama and surface its real download progress.
+// Only one pull runs at a time — starting a second while one is in
+// flight would just compete for the same bandwidth/disk for no benefit.
+let pullInProgress = false;
+
+ipcMain.handle('models:pull', async (event, { name }) => {
+  if (pullInProgress) return { ok: false, error: 'A model pull is already in progress.' };
+  const modelName = (name || '').trim();
+  if (!modelName) return { ok: false, error: 'Enter a model name first.' };
+
+  pullInProgress = true;
+  try {
+    const res = await fetch(`${OLLAMA_URL}/api/pull`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: modelName, stream: true }),
+    });
+
+    if (!res.ok || !res.body) {
+      const text = await res.text().catch(() => '');
+      return { ok: false, error: `Ollama rejected the request (${res.status}): ${text || res.statusText}` };
+    }
+
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split('\n');
+      buffer = lines.pop();
+
+      for (const line of lines) {
+        if (!line.trim()) continue;
+        const chunk = JSON.parse(line);
+        if (chunk.error) {
+          return { ok: false, error: chunk.error };
+        }
+        event.sender.send('models:pullProgress', {
+          status: chunk.status,
+          completed: chunk.completed ?? null,
+          total: chunk.total ?? null,
+        });
+        if (chunk.status === 'success') {
+          return { ok: true };
+        }
+      }
+    }
+    return { ok: true };
+  } catch (err) {
+    return { ok: false, error: err.message };
+  } finally {
+    pullInProgress = false;
+  }
+});
+
 // --- Memory (manual v1) -------------------------------------------------
 
 ipcMain.handle('memory:save', async (_event, { subject, content, chatId }) => {
