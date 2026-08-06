@@ -3,6 +3,8 @@ const { contextBridge, ipcRenderer } = require('electron');
 contextBridge.exposeInMainWorld('callama', {
   listModels: () => ipcRenderer.invoke('models:list'),
   pullModel: (name) => ipcRenderer.invoke('models:pull', { name }),
+  listAllModels: () => ipcRenderer.invoke('models:listAll'),
+  deleteModel: (name) => ipcRenderer.invoke('models:delete', { name }),
   onPullProgress: (callback) =>
     ipcRenderer.on('models:pullProgress', (_event, data) => callback(data)),
   checkOllama: () => ipcRenderer.invoke('ollama:status'),

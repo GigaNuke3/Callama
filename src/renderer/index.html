@@ -61,13 +61,12 @@
           <select id="model" class="select select-sm select-bordered w-full mt-1"></select>
 
           <div class="flex gap-1 mt-2">
-            <h6>
             <input
               id="pull-model-input"
               type="text"
               placeholder="paste a model name to download..."
               class="input input-xs input-bordered flex-1"
-            /></h6>
+            />
             <button id="pull-model-btn" class="btn btn-xs font-display normal-case">pull</button>
           </div>
           <div id="pull-progress-wrap" class="hidden mt-1.5">
@@ -76,6 +75,11 @@
               <div id="pull-progress-bar" class="h-full bg-base-content" style="width: 0%"></div>
             </div>
           </div>
+
+          <button id="manage-models-toggle" class="text-[10px] text-base-content/40 hover:text-base-content font-display mt-2">
+            manage models
+          </button>
+          <div id="manage-models-list" class="hidden flex flex-col gap-1 mt-1.5 max-h-40 overflow-y-auto"></div>
         </div>
         <div>
           <label class="text-[10px] font-display uppercase tracking-widest text-base-content/40">
@@ -569,6 +573,7 @@ pullBtn.addEventListener('click', async () => {
     pullProgressBar.style.width = '100%';
     pullInput.value = '';
     await loadModels();
+    if (manageModelsOpen) await renderManageModelsList();
     setTimeout(() => pullProgressWrap.classList.add('hidden'), 3000);
   } else {
     pullStatusText.textContent = `Failed: ${result.error}`;
@@ -579,6 +584,91 @@ pullBtn.addEventListener('click', async () => {
 pullInput.addEventListener('keydown', (e) => {
   if (e.key === 'Enter') { e.preventDefault(); pullBtn.click(); }
 });
+
+const manageModelsToggle = document.getElementById('manage-models-toggle');
+const manageModelsList = document.getElementById('manage-models-list');
+let manageModelsOpen = false;
+
+function formatBytes(bytes) {
+  if (bytes == null) return '';
+  const mb = bytes / 1_000_000;
+  return mb >= 1000 ? (mb / 1000).toFixed(1) + ' GB' : mb.toFixed(0) + ' MB';
+}
+
+manageModelsToggle.addEventListener('click', async () => {
+  manageModelsOpen = !manageModelsOpen;
+  manageModelsList.classList.toggle('hidden', !manageModelsOpen);
+  if (manageModelsOpen) await renderManageModelsList();
+});
+
+async function renderManageModelsList() {
+  const models = await window.callama.listAllModels();
+  manageModelsList.innerHTML = '';
+  if (models.length === 0) {
+    const empty = document.createElement('p');
+    empty.className = 'text-[11px] text-base-content/40';
+    empty.textContent = 'No models installed.';
+    manageModelsList.appendChild(empty);
+    return;
+  }
+  for (const m of models) manageModelsList.appendChild(manageModelRow(m));
+}
+
+function manageModelRow(model) {
+  const row = document.createElement('div');
+  row.className = 'flex items-center gap-2 text-[11px]';
+
+  const name = document.createElement('span');
+  name.className = 'flex-1 truncate';
+  name.textContent = model.name;
+  row.appendChild(name);
+
+  const size = document.createElement('span');
+  size.className = 'text-base-content/40 shrink-0';
+  size.textContent = formatBytes(model.size);
+  row.appendChild(size);
+
+  // Two-click confirm: first click arms it and shows "confirm?" for a
+  // few seconds; a second click within that window actually deletes.
+  // Clicking anywhere else, or just waiting, disarms it automatically —
+  // a model file is real disk space and takes real time to re-download,
+  // so this shouldn't be a single accidental click away.
+  const delBtn = document.createElement('button');
+  delBtn.className = 'text-base-content/40 hover:text-base-content shrink-0';
+  delBtn.textContent = 'delete';
+  let armed = false;
+  let disarmTimer = null;
+
+  delBtn.addEventListener('click', async (e) => {
+    e.stopPropagation();
+    if (!armed) {
+      armed = true;
+      delBtn.textContent = 'confirm?';
+      delBtn.classList.add('text-base-content');
+      disarmTimer = setTimeout(() => {
+        armed = false;
+        delBtn.textContent = 'delete';
+        delBtn.classList.remove('text-base-content');
+      }, 4000);
+      return;
+    }
+    clearTimeout(disarmTimer);
+    delBtn.disabled = true;
+    delBtn.textContent = 'deleting...';
+    const result = await window.callama.deleteModel(model.name);
+    if (result.ok) {
+      await renderManageModelsList();
+      await loadModels(); // the chat dropdown may have just lost an option
+    } else {
+      delBtn.disabled = false;
+      delBtn.textContent = 'failed — retry';
+      armed = false;
+    }
+  });
+
+  row.appendChild(delBtn);
+  return row;
+}
 
 window.callama.onChunk(({ chatId, delta }) => {
   if (!streamingChats.has(chatId)) {

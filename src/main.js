@@ -217,6 +217,50 @@ ipcMain.handle('models:pull', async (event, { name }) => {
   }
 });
 
+// List of installed models for the model management view — excludes
+// EMBED_MODEL. Unlike models:list (which hides ALL embedding-style
+// models just because they can't chat), this specifically hides the
+// ONE model the app itself hardcodes a dependency on for memory
+// search. It's not "just another model you happen to have" — deleting
+// it silently breaks a real feature, so it shouldn't be reachable from
+// a UI whose whole job is offering deletion.
+ipcMain.handle('models:listAll', async () => {
+  const res = await fetch(`${OLLAMA_URL}/api/tags`);
+  const data = await res.json();
+  return (data.models || [])
+    .map((m) => ({ name: m.name, size: m.size ?? null }))
+    .filter((m) => m.name !== EMBED_MODEL);
+});
+
+// Deletes a model via Ollama's real /api/delete endpoint. No
+// confirmation logic here — that's deliberately the renderer's job
+// (the two-step "click, then confirm" UI), so this stays a single,
+// unambiguous action once it's actually called.
+ipcMain.handle('models:delete', async (_event, { name }) => {
+  const modelName = (name || '').trim();
+  if (!modelName) return { ok: false, error: 'No model name given.' };
+  // Hidden from the management list, but guarded here too — the real
+  // protection should live where deletion actually happens, not only
+  // in what the UI happens to show. Never delete via any path.
+  if (modelName === EMBED_MODEL) {
+    return { ok: false, error: `${EMBED_MODEL} is required for memory search and can't be deleted from here.` };
+  }
+  try {
+    const res = await fetch(`${OLLAMA_URL}/api/delete`, {
+      method: 'DELETE',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: modelName }),
+    });
+    if (!res.ok) {
+      const text = await res.text().catch(() => '');
+      return { ok: false, error: `Ollama rejected the request (${res.status}): ${text || res.statusText}` };
+    }
+    return { ok: true };
+  } catch (err) {
+    return { ok: false, error: err.message };
+  }
+});
+
 // --- Memory (manual v1) -------------------------------------------------
 
 ipcMain.handle('memory:save', async (_event, { subject, content, chatId }) => {
