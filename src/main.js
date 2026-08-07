@@ -118,6 +118,17 @@ ipcMain.handle('ollama:status', async () => ({ connected: await isOllamaReachabl
 // model degrades memory features silently rather than breaking chat.
 const EMBED_MODEL = 'nomic-embed-text';
 
+// Matches EMBED_MODEL (or any embedding-style model) regardless of tag
+// suffix. A bare "name !== EMBED_MODEL" check silently fails, since
+// Ollama's /api/tags returns tagged names like "nomic-embed-text:latest"
+// — never equal to the untagged constant. Hit this exact bug once
+// already on models:list; consolidating into one helper so it can't
+// silently diverge again across the three places that need it.
+function isEmbedModel(name) {
+  const bare = name.split(':')[0];
+  return bare === EMBED_MODEL || name.toLowerCase().includes('embed');
+}
+
 async function embed(text, signal) {
   try {
     // 10s timeout — memory retrieval should never be able to hang the
@@ -147,11 +158,9 @@ ipcMain.handle('models:list', async () => {
   const data = await res.json();
   // Exclude embedding-only models (e.g. nomic-embed-text) — they have no
   // chat/generation capability and would break responses if selected.
-  // EMBED_MODEL itself is always excluded; the "embed" substring check
-  // catches other common embedding model families too (mxbai-embed-*, etc.)
   return (data.models || [])
     .map((m) => m.name)
-    .filter((name) => name !== EMBED_MODEL && !name.toLowerCase().includes('embed'));
+    .filter((name) => !isEmbedModel(name));
 });
 
 // Downloads a model via Ollama's own /api/pull — a real, official,
@@ -229,7 +238,7 @@ ipcMain.handle('models:listAll', async () => {
   const data = await res.json();
   return (data.models || [])
     .map((m) => ({ name: m.name, size: m.size ?? null }))
-    .filter((m) => m.name !== EMBED_MODEL);
+    .filter((m) => !isEmbedModel(m.name));
 });
 
 // Deletes a model via Ollama's real /api/delete endpoint. No
@@ -242,7 +251,7 @@ ipcMain.handle('models:delete', async (_event, { name }) => {
   // Hidden from the management list, but guarded here too — the real
   // protection should live where deletion actually happens, not only
   // in what the UI happens to show. Never delete via any path.
-  if (modelName === EMBED_MODEL) {
+  if (isEmbedModel(modelName)) {
     return { ok: false, error: `${EMBED_MODEL} is required for memory search and can't be deleted from here.` };
   }
   try {
