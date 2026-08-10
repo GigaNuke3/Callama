@@ -123,6 +123,38 @@ class ChatStore {
     return this.db.prepare('SELECT * FROM chats ORDER BY pinned DESC, updated_at DESC').all();
   }
 
+  // Searches both chat titles AND message content across every subject
+  // table — a title match alone isn't enough once you have a lot of
+  // chats, since the title doesn't always reflect what's actually
+  // inside. Simple LIKE matching (case-insensitive) — no need for a
+  // full-text-search index at the scale a single person's chat history
+  // will ever reach.
+  searchChats(term) {
+    const trimmed = (term || '').trim();
+    if (!trimmed) return this.listChats();
+    const like = `%${trimmed}%`;
+
+    const titleMatchIds = this.db
+      .prepare('SELECT id FROM chats WHERE title LIKE ? COLLATE NOCASE')
+      .all(like)
+      .map((r) => r.id);
+
+    const contentMatchIds = new Set();
+    for (const subject of SUBJECTS) {
+      const rows = this.db
+        .prepare(`SELECT DISTINCT chat_id FROM ${subject} WHERE content LIKE ? COLLATE NOCASE`)
+        .all(like);
+      rows.forEach((r) => contentMatchIds.add(r.chat_id));
+    }
+
+    const allIds = new Set([...titleMatchIds, ...contentMatchIds]);
+    if (allIds.size === 0) return [];
+    const placeholders = [...allIds].map(() => '?').join(',');
+    return this.db
+      .prepare(`SELECT * FROM chats WHERE id IN (${placeholders}) ORDER BY pinned DESC, updated_at DESC`)
+      .all(...allIds);
+  }
+
   renameChat(chatId, title) {
     this.db.prepare('UPDATE chats SET title = ? WHERE id = ?').run(title, chatId);
     return this._getChat(chatId);
@@ -269,6 +301,19 @@ class ChatStore {
     // needs to respond to, regardless of real-world timing races
     // between chats.
     return [...trimmedRest, ...ownChat];
+  }
+
+  // Same caps as getContext (must stay in sync — these are the actual
+  // defaults getContext uses), returning how full the context actually
+  // is right now for a chat, for a visible usage indicator in the UI.
+  // Reusing getContext itself rather than duplicating its trim logic —
+  // the result IS already what would be sent to Ollama, so counting it
+  // directly is always accurate, never a separate estimate that could
+  // drift out of sync with the real behavior.
+  getContextStats(chatId, { limit = 40, maxChars = 3000 } = {}) {
+    const context = this.getContext(chatId, { limit, maxChars });
+    const totalChars = context.reduce((sum, m) => sum + m.content.length, 0);
+    return { count: context.length, totalChars, limit, maxChars };
   }
 
   // --- Memory (manual, v1) --------------------------------------------

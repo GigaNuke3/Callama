@@ -299,6 +299,10 @@ ipcMain.handle('memory:delete', (_event, { id }) => {
 
 ipcMain.handle('chats:list', () => store.listChats());
 
+ipcMain.handle('chats:search', (_event, { term }) => store.searchChats(term));
+
+ipcMain.handle('chat:contextStats', (_event, { chatId }) => store.getContextStats(chatId));
+
 ipcMain.handle('chats:create', (_event, { subject }) => {
   if (!SUBJECTS.includes(subject)) throw new Error(`Unknown subject: ${subject}`);
   return store.createChat(subject);

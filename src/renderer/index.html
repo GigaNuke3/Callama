@@ -94,8 +94,18 @@
 
     <main class="flex-1 flex flex-col min-w-0">
       <header class="border-b border-base-300 px-6 py-3 shrink-0">
-        <h2 id="chat-title" class="font-display text-sm tracking-wide"></h2>
-        <p id="chat-subject-desc" class="text-[12px] text-base-content/50 mt-0.5"></p>
+        <div class="flex items-start justify-between gap-4">
+          <div class="min-w-0">
+            <h2 id="chat-title" class="font-display text-sm tracking-wide"></h2>
+            <p id="chat-subject-desc" class="text-[12px] text-base-content/50 mt-0.5"></p>
+          </div>
+          <div id="context-indicator" class="shrink-0 text-right" title="How full this chat's context is">
+            <div class="text-[10px] font-display text-base-content/40" id="context-indicator-text"></div>
+            <div class="w-24 h-1 bg-base-300 rounded-full mt-1 overflow-hidden ml-auto">
+              <div id="context-indicator-bar" class="h-full bg-base-content/60" style="width: 0%"></div>
+            </div>
+          </div>
+        </div>
       </header>
 
       <div id="history" class="flex-1 overflow-y-auto px-6 py-5 flex flex-col"></div>
@@ -177,6 +187,8 @@ const tempEl = document.getElementById('temperature');
 const tempValEl = document.getElementById('temp-val');
 const titleEl = document.getElementById('chat-title');
 const descEl = document.getElementById('chat-subject-desc');
+const contextIndicatorText = document.getElementById('context-indicator-text');
+const contextIndicatorBar = document.getElementById('context-indicator-bar');
 
 newChatBtn.addEventListener('click', () => {
   newChatForm.classList.remove('hidden');
@@ -239,21 +251,32 @@ newChatConfirm.addEventListener('click', async () => {
 });
 
 let searchTerm = '';
+let visibleChats = [];
+let searchDebounceTimer = null;
 const chatSearchEl = document.getElementById('chat-search');
 chatSearchEl.addEventListener('input', () => {
   searchTerm = chatSearchEl.value;
-  renderChatList();
+  clearTimeout(searchDebounceTimer);
+  searchDebounceTimer = setTimeout(() => updateVisibleChats(), 150);
 });
 
 async function refreshChatList() {
   chats = await window.callama.listChats();
+  await updateVisibleChats();
+}
+
+// Search hits the database directly (title AND message content) rather
+// than just filtering the already-fetched `chats` array client-side —
+// a title alone doesn't tell you what's actually inside a conversation.
+async function updateVisibleChats() {
+  const term = searchTerm.trim();
+  visibleChats = term ? await window.callama.searchChats(term) : chats;
   renderChatList();
 }
 
 function renderChatList() {
   chatListEl.innerHTML = '';
-  const term = searchTerm.trim().toLowerCase();
-  const visible = term ? chats.filter((c) => c.title.toLowerCase().includes(term)) : chats;
+  const visible = visibleChats;
   const pinned = visible.filter((c) => c.pinned);
   const unpinned = visible.filter((c) => !c.pinned);
 
@@ -269,7 +292,7 @@ function renderChatList() {
   if (visible.length === 0) {
     const empty = document.createElement('p');
     empty.className = 'text-[12px] text-base-content/40 px-1 mt-2';
-    empty.textContent = term ? 'No chats match your search.' : 'No chats yet.';
+    empty.textContent = searchTerm.trim() ? 'No chats match your search.' : 'No chats yet.';
     chatListEl.appendChild(empty);
   }
 }
@@ -372,6 +395,22 @@ async function setActiveChat(chatId) {
   await refreshChatList();
   await loadHistory();
   updateSendButton();
+  updateContextIndicator(chatId);
+}
+
+// Shows how full THIS chat's actual context is — the same figures
+// getContext() itself uses when building a request, not a separate
+// estimate that could drift out of sync. Two caps exist (message count
+// and character budget); shows whichever fraction is closer to its
+// limit, since that's the one that would actually bind first.
+async function updateContextIndicator(chatId) {
+  const stats = await window.callama.getContextStats(chatId);
+  if (chatId !== activeChatId) return; // chat switched again while this was in flight
+  const countFraction = stats.count / stats.limit;
+  const charFraction = stats.totalChars / stats.maxChars;
+  const pct = Math.round(Math.max(countFraction, charFraction) * 100);
+  contextIndicatorBar.style.width = Math.min(pct, 100) + '%';
+  contextIndicatorText.textContent = `${stats.count}/${stats.limit} msgs · ${stats.totalChars}/${stats.maxChars} chars`;
 }
 
 function updateSendButton() {
@@ -405,6 +444,7 @@ function bubble(row, { isLastAssistant = false } = {}) {
   if (!row.id) return wrap;
 
   const actions = [];
+  actions.push(['copy', (actionEl) => copyMessage(row, actionEl)]);
   if (isUser) {
     actions.push([row.edited_at ? 'edited · click to edit again' : 'edit', () => startEdit(wrap, content, row)]);
   }
@@ -425,6 +465,16 @@ function bubble(row, { isLastAssistant = false } = {}) {
   wrap.appendChild(footer);
 
   return wrap;
+}
+
+async function copyMessage(row, actionEl) {
+  try {
+    await navigator.clipboard.writeText(row.content);
+    actionEl.textContent = 'copied ✓';
+  } catch {
+    actionEl.textContent = 'copy failed';
+  }
+  setTimeout(() => { actionEl.textContent = 'copy'; }, 1500);
 }
 
 async function saveAsMemory(row, actionEl) {
@@ -708,6 +758,7 @@ window.callama.onDone(async ({ chatId, stopped, timedOut }) => {
     streamingBubble = null;
     streamingRaw = '';
     updateSendButton();
+    updateContextIndicator(chatId);
   }
   await refreshChatList();
 });
