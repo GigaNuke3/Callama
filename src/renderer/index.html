@@ -22,6 +22,9 @@
         <button id="new-chat-btn" class="btn btn-sm btn-outline justify-start font-display normal-case flex-1">
           + new chat
         </button>
+        <button id="profile-btn" class="btn btn-sm btn-outline font-display normal-case" title="Edit your profile">
+          bio
+        </button>
         <button id="memory-btn" class="btn btn-sm btn-outline font-display normal-case" title="View memories">
           mem
         </button>
@@ -123,6 +126,29 @@
 
   </div>
 
+  <dialog id="profile-modal" class="modal">
+    <div class="modal-box max-w-lg">
+      <h3 class="font-display text-sm uppercase tracking-wide">your profile</h3>
+      <p class="text-[12px] text-base-content/50 mt-1">
+        A short bio about you — included in every chat, across every subject,
+        so the AI has context on who it's talking to without you repeating yourself.
+      </p>
+      <textarea
+        id="profile-bio-input"
+        class="textarea textarea-bordered w-full mt-4 h-32"
+        placeholder="Tell it about yourself — your name, what you do, anything worth it knowing up front..."
+      ></textarea>
+      <div class="modal-action items-center">
+        <span id="profile-save-status" class="text-[11px] text-base-content/40 mr-auto"></span>
+        <form method="dialog">
+          <button class="btn btn-sm font-display normal-case">close</button>
+        </form>
+        <button id="profile-save-btn" class="btn btn-sm btn-primary font-display normal-case">save</button>
+      </div>
+    </div>
+    <form method="dialog" class="modal-backdrop"><button>close</button></form>
+  </dialog>
+
   <dialog id="memory-modal" class="modal">
     <div class="modal-box max-w-lg">
       <h3 class="font-display text-sm uppercase tracking-wide">memories</h3>
@@ -194,6 +220,25 @@ newChatBtn.addEventListener('click', () => {
   newChatForm.classList.remove('hidden');
   newChatForm.classList.add('flex');
   newChatBtn.classList.add('hidden');
+});
+
+const profileBtn = document.getElementById('profile-btn');
+const profileModal = document.getElementById('profile-modal');
+const profileBioInput = document.getElementById('profile-bio-input');
+const profileSaveBtn = document.getElementById('profile-save-btn');
+const profileSaveStatus = document.getElementById('profile-save-status');
+
+profileBtn.addEventListener('click', async () => {
+  profileBioInput.value = await window.callama.getProfile();
+  profileSaveStatus.textContent = '';
+  profileModal.showModal();
+});
+
+profileSaveBtn.addEventListener('click', async () => {
+  profileSaveStatus.textContent = 'saving...';
+  await window.callama.setProfile(profileBioInput.value);
+  profileSaveStatus.textContent = 'saved ✓';
+  setTimeout(() => { profileSaveStatus.textContent = ''; }, 1500);
 });
 
 memoryBtn.addEventListener('click', () => openMemoryModal());

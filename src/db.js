@@ -79,6 +79,19 @@ function openDatabase(dbPath) {
   `);
   db.exec(`CREATE INDEX IF NOT EXISTS idx_memories_subject ON memories(subject);`);
 
+  // Single-row table (id is always 1) for a persistent "about you" bio
+  // — unlike memories, which are subject-scoped and surfaced by
+  // relevance search, this is meant to always be present, in every
+  // chat, regardless of subject. Who you are isn't specific to Health
+  // or LogicalThinking; it's context every subject can reasonably use.
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS profile (
+      id INTEGER PRIMARY KEY CHECK (id = 1),
+      bio TEXT NOT NULL DEFAULT '',
+      updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+    );
+  `);
+
   return db;
 }
 
@@ -394,6 +407,23 @@ class ChatStore {
       .slice(0, topK);
 
     return scored;
+  }
+
+  // --- Profile (persistent "about you" bio) ---------------------------
+
+  getProfile() {
+    const row = this.db.prepare('SELECT bio FROM profile WHERE id = 1').get();
+    return row ? row.bio : '';
+  }
+
+  setProfile(bio) {
+    this.db
+      .prepare(`
+        INSERT INTO profile (id, bio, updated_at) VALUES (1, ?, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+        ON CONFLICT(id) DO UPDATE SET bio = excluded.bio, updated_at = excluded.updated_at
+      `)
+      .run(bio || '');
+    return this.getProfile();
   }
 
   close() {

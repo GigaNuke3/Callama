@@ -10,6 +10,8 @@ contextBridge.exposeInMainWorld('callama', {
   checkOllama: () => ipcRenderer.invoke('ollama:status'),
 
   listChats: () => ipcRenderer.invoke('chats:list'),
+  getProfile: () => ipcRenderer.invoke('profile:get'),
+  setProfile: (bio) => ipcRenderer.invoke('profile:set', { bio }),
   searchChats: (term) => ipcRenderer.invoke('chats:search', { term }),
   getContextStats: (chatId) => ipcRenderer.invoke('chat:contextStats', { chatId }),
   createChat: (subject) => ipcRenderer.invoke('chats:create', { subject }),

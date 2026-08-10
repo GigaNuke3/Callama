@@ -297,6 +297,11 @@ ipcMain.handle('memory:delete', (_event, { id }) => {
 
 // --- Chat CRUD ---------------------------------------------------------
 
+// --- Profile ("about you" bio, injected into every chat) ---------------
+
+ipcMain.handle('profile:get', () => store.getProfile());
+ipcMain.handle('profile:set', (_event, { bio }) => store.setProfile(bio));
+
 ipcMain.handle('chats:list', () => store.listChats());
 
 ipcMain.handle('chats:search', (_event, { term }) => store.searchChats(term));
@@ -433,6 +438,15 @@ async function streamReply(event, chatId, model, temperature) {
   activeStreams.set(chatId, controller);
 
   const messages = [{ role: 'system', content: SUBJECT_PROMPTS[chat.subject] }];
+
+  // Profile bio, if set — unlike the subject prompt (which is per-
+  // subject) or memory (which is retrieved by relevance), this is
+  // always included, every subject, every chat. Who you are isn't
+  // scoped information.
+  const bio = store.getProfile();
+  if (bio.trim()) {
+    messages.push({ role: 'system', content: `About the user (for your context, may or may not be relevant): ${bio}` });
+  }
 
   // Memory retrieval: embed the most recent message (the thing that
   // triggered this reply) and pull in whatever's actually relevant from

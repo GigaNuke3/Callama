@@ -2303,6 +2303,9 @@
   .mr-1 {
     margin-right: var(--spacing);
   }
+  .mr-auto {
+    margin-right: auto;
+  }
   .mb-0\.5 {
     margin-bottom: calc(var(--spacing) * 0.5);
   }
@@ -2392,6 +2395,9 @@
   }
   .h-1\.5 {
     height: calc(var(--spacing) * 1.5);
+  }
+  .h-32 {
+    height: calc(var(--spacing) * 32);
   }
   .h-full {
     height: 100%;
