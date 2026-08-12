@@ -83,6 +83,7 @@ function createWindow() {
   mainWindow = new BrowserWindow({
     width: 960,
     height: 660,
+    icon: path.join(__dirname, 'renderer', 'icon', 'Callama_icon.png'),
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
