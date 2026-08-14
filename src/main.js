@@ -19,15 +19,69 @@ async function isOllamaReachable() {
   }
 }
 
-// Called once at startup. If Ollama's already up, do nothing. Otherwise
-// try to spawn `ollama serve` ourselves and wait (with a short retry
-// loop, since it takes a moment to bind its port) for it to come online.
-// Either way, this never blocks the app window from opening — Callama
-// still launches even if Ollama can't be reached, just with the
-// connection indicator showing disconnected.
-async function ensureOllamaRunning() {
+// Distinguishes "installed but not running" from "not on this machine
+// at all" — a spawn failing with ENOENT specifically means the OS
+// couldn't find the `ollama` command anywhere on PATH. Any other
+// outcome (including the process erroring for some other reason)
+// means the binary exists, so we don't try to reinstall over it.
+function isOllamaInstalled() {
+  return new Promise((resolve) => {
+    let resolved = false;
+    const check = spawn('ollama', ['--version'], { stdio: 'ignore' });
+    check.on('error', (err) => {
+      if (resolved) return;
+      resolved = true;
+      resolve(err.code !== 'ENOENT');
+    });
+    check.on('exit', () => {
+      if (resolved) return;
+      resolved = true;
+      resolve(true);
+    });
+  });
+}
+
+// Runs Ollama's own official install script — the exact same command
+// from ollama.com's install page, just automated instead of asked for.
+// Windows: the official PowerShell one-liner. Linux: the official
+// shell one-liner (also covers macOS, per Ollama's own docs). Nothing
+// here is a custom installer — Callama only ever triggers Ollama's own,
+// real, official install path.
+function runOllamaInstaller(onStatus) {
+  return new Promise((resolve) => {
+    onStatus?.('installing');
+    let installer;
+    if (process.platform === 'win32') {
+      installer = spawn('powershell.exe', ['-NoProfile', '-Command', 'irm https://ollama.com/install.ps1 | iex'], { stdio: 'ignore' });
+    } else {
+      installer = spawn('sh', ['-c', 'curl -fsSL https://ollama.com/install.sh | sh'], { stdio: 'ignore' });
+    }
+    installer.on('error', (err) => {
+      console.error('Ollama installer failed to start:', err.message);
+      resolve(false);
+    });
+    installer.on('exit', (code) => resolve(code === 0));
+  });
+}
+
+// Called once at startup. If Ollama's already up, do nothing. If it's
+// installed but not running, start it. If it's not installed at all,
+// install it automatically (no confirmation prompt — see the decision
+// this was built on), then start it. Either way, this never blocks the
+// app window from opening — Callama still launches even if setup fails,
+// just with the connection indicator showing disconnected.
+async function ensureOllamaRunning(onStatus) {
   if (await isOllamaReachable()) return true;
 
+  if (!(await isOllamaInstalled())) {
+    const installedOk = await runOllamaInstaller(onStatus);
+    if (!installedOk) {
+      onStatus?.('install-failed');
+      return false;
+    }
+  }
+
+  onStatus?.('starting');
   try {
     ollamaProcess = spawn('ollama', ['serve'], { stdio: 'ignore' });
     ollamaProcess.on('error', (err) => {
@@ -36,13 +90,18 @@ async function ensureOllamaRunning() {
     });
   } catch (err) {
     console.error('Failed to spawn ollama serve:', err.message);
+    onStatus?.('start-failed');
     return false;
   }
 
   for (let attempt = 0; attempt < 10; attempt++) {
     await new Promise((r) => setTimeout(r, 500));
-    if (await isOllamaReachable()) return true;
+    if (await isOllamaReachable()) {
+      onStatus?.('ready');
+      return true;
+    }
   }
+  onStatus?.('start-failed');
   return false;
 }
 
@@ -96,7 +155,11 @@ function createWindow() {
 app.whenReady().then(async () => {
   store = new ChatStore(path.join(app.getPath('userData'), 'callama.db'));
   createWindow();
-  await ensureOllamaRunning(); // window is already open by the time this resolves
+  // window is already open by the time this resolves — status updates
+  // (installing, starting, ready, etc.) are pushed to it as they happen
+  await ensureOllamaRunning((status) => {
+    mainWindow?.webContents.send('ollama:setupStatus', { status });
+  });
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();

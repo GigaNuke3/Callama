@@ -1,0 +1,19 @@
+directories:
+  output: dist
+  buildResources: build
+appId: com.eco.callama
+productName: Callama
+files:
+  - filter:
+      - src/**/*
+      - package.json
+      - '!src/JetBrains_Mono/**/*'
+win:
+  target: nsis
+  icon: src/renderer/icon/Callama_icon.ico
+nsis:
+  oneClick: false
+  allowToChangeInstallationDirectory: true
+  createDesktopShortcut: true
+  createStartMenuShortcut: true
+electronVersion: 31.7.7

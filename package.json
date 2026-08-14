@@ -2,10 +2,32 @@
   "name": "callama",
   "version": "0.1.0",
   "description": "Offline desktop AI assistant powered by Ollama, with subject-scoped memory",
+  "author": "Eco",
   "main": "src/main.js",
   "scripts": {
     "start": "electron .",
-    "build:css": "tailwindcss -i src/renderer/input.css -o src/renderer/output.css"
+    "build:css": "tailwindcss -i src/renderer/input.css -o src/renderer/output.css",
+    "postinstall": "electron-builder install-app-deps",
+    "dist:win": "rm -rf node_modules/better-sqlite3/build && electron-builder --win"
+  },
+  "build": {
+    "appId": "com.eco.callama",
+    "productName": "Callama",
+    "files": [
+      "src/**/*",
+      "package.json",
+      "!src/JetBrains_Mono/**/*"
+    ],
+    "win": {
+      "target": "nsis",
+      "icon": "src/renderer/icon/Callama_icon.ico"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true
+    }
   },
   "dependencies": {
     "better-sqlite3": "^11.10.0",
@@ -16,6 +38,7 @@
     "@tailwindcss/cli": "^4.3.3",
     "daisyui": "^5.7.13",
     "electron": "^31.3.1",
+    "electron-builder": "^26.15.3",
     "tailwindcss": "^4.3.3"
   }
 }

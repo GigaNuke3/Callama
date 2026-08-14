@@ -8,6 +8,8 @@ contextBridge.exposeInMainWorld('callama', {
   onPullProgress: (callback) =>
     ipcRenderer.on('models:pullProgress', (_event, data) => callback(data)),
   checkOllama: () => ipcRenderer.invoke('ollama:status'),
+  onOllamaSetupStatus: (callback) =>
+    ipcRenderer.on('ollama:setupStatus', (_event, data) => callback(data)),
 
   listChats: () => ipcRenderer.invoke('chats:list'),
   getProfile: () => ipcRenderer.invoke('profile:get'),
