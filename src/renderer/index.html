@@ -617,6 +617,9 @@ const SETUP_BANNER_MESSAGES = {
   ready: null, // clears the banner
   'install-failed': "Couldn't install Ollama automatically — install it yourself from ollama.com, then restart Callama.",
   'start-failed': "Ollama installed but wouldn't start — try running it yourself, or restart Callama.",
+  'pulling-embed-model': 'Setting up memory search (downloading a small model, one-time only)...',
+  'embed-model-ready': null, // clears the banner
+  'embed-model-failed': "Couldn't set up memory search automatically — pull \"nomic-embed-text\" yourself from the sidebar.",
 };
 window.callama.onOllamaSetupStatus(({ status }) => {
   const message = SETUP_BANNER_MESSAGES[status];

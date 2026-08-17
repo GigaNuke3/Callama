@@ -152,14 +152,47 @@ function createWindow() {
   mainWindow.loadFile(path.join(__dirname, 'renderer', 'index.html'));
 }
 
+// Memory search needs EMBED_MODEL specifically, and it's never pulled
+// by anything else — a fresh Ollama install (even one Callama just set
+// up itself) has zero models on it. Without this, "remember" would
+// silently report "unavailable" on every new machine until someone
+// manually pulled it, which is exactly what happened on first real-world
+// use. Same "fully automatic" philosophy as the Ollama install itself —
+// not blocking, though: chat works fine without this, so it runs in the
+// background rather than making the person wait through a ~270MB
+// download before they can send their first message.
+async function ensureEmbeddingModelPulled(onStatus) {
+  try {
+    const res = await fetch(`${OLLAMA_URL}/api/tags`);
+    const data = await res.json();
+    const alreadyHave = (data.models || []).some((m) => isEmbedModel(m.name));
+    if (alreadyHave) return true;
+  } catch {
+    return false; // Ollama not reachable — ensureOllamaRunning already surfaced that
+  }
+
+  onStatus?.('pulling-embed-model');
+  const result = await pullModel(EMBED_MODEL, () => {}); // progress not surfaced here — the setup banner just shows one status, not a full progress bar
+  onStatus?.(result.ok ? 'embed-model-ready' : 'embed-model-failed');
+  return result.ok;
+}
+
 app.whenReady().then(async () => {
   store = new ChatStore(path.join(app.getPath('userData'), 'callama.db'));
   createWindow();
   // window is already open by the time this resolves — status updates
   // (installing, starting, ready, etc.) are pushed to it as they happen
-  await ensureOllamaRunning((status) => {
+  const ollamaReady = await ensureOllamaRunning((status) => {
     mainWindow?.webContents.send('ollama:setupStatus', { status });
   });
+
+  // Fire-and-forget — chatting works fine while this runs in the
+  // background; only memory search depends on it.
+  if (ollamaReady) {
+    ensureEmbeddingModelPulled((status) => {
+      mainWindow?.webContents.send('ollama:setupStatus', { status });
+    });
+  }
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();
@@ -228,25 +261,22 @@ ipcMain.handle('models:list', async () => {
 });
 
 // Downloads a model via Ollama's own /api/pull — a real, official,
-// stable local endpoint, not a scrape of any website. The user
-// supplies the model name themselves (copied from browsing
-// ollama.com's library in their own browser); Callama's only job is
-// to hand that name to Ollama and surface its real download progress.
+// stable local endpoint, not a scrape of any website.
 // Only one pull runs at a time — starting a second while one is in
 // flight would just compete for the same bandwidth/disk for no benefit.
 let pullInProgress = false;
 
-ipcMain.handle('models:pull', async (event, { name }) => {
+async function pullModel(modelName, onProgress) {
   if (pullInProgress) return { ok: false, error: 'A model pull is already in progress.' };
-  const modelName = (name || '').trim();
-  if (!modelName) return { ok: false, error: 'Enter a model name first.' };
+  const name = (modelName || '').trim();
+  if (!name) return { ok: false, error: 'Enter a model name first.' };
 
   pullInProgress = true;
   try {
     const res = await fetch(`${OLLAMA_URL}/api/pull`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ name: modelName, stream: true }),
+      body: JSON.stringify({ name, stream: true }),
     });
 
     if (!res.ok || !res.body) {
@@ -272,7 +302,7 @@ ipcMain.handle('models:pull', async (event, { name }) => {
         if (chunk.error) {
           return { ok: false, error: chunk.error };
         }
-        event.sender.send('models:pullProgress', {
+        onProgress?.({
           status: chunk.status,
           completed: chunk.completed ?? null,
           total: chunk.total ?? null,
@@ -288,7 +318,11 @@ ipcMain.handle('models:pull', async (event, { name }) => {
   } finally {
     pullInProgress = false;
   }
-});
+}
+
+ipcMain.handle('models:pull', (event, { name }) =>
+  pullModel(name, (progress) => event.sender.send('models:pullProgress', progress))
+);
 
 // List of installed models for the model management view — excludes
 // EMBED_MODEL. Unlike models:list (which hides ALL embedding-style
