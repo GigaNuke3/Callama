@@ -4,3 +4,4 @@ callama.db-wal
 callama.db-shm
 *.log
 dist/
+dist/
