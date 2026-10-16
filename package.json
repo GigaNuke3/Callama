@@ -2,7 +2,13 @@
   "name": "callama",
   "version": "0.1.0",
   "description": "Offline desktop AI assistant powered by Ollama, with subject-scoped memory",
-  "author": "Eco",
+  "homepage": "https://callama.vercel.app",
+  "license": "MIT",
+  "repository": "github:GigaNuke3/Callama",
+  "author": {
+    "name": "Eco",
+    "email": "gorospeedilcon@gmail.com"
+  },
   "main": "src/main.js",
   "scripts": {
     "start": "electron .",
@@ -20,13 +26,31 @@
     ],
     "win": {
       "target": "nsis",
-      "icon": "src/renderer/icon/Callama_icon.ico"
+      "icon": "src/renderer/icon/Callama_icon.ico",
+      "artifactName": "Callama-Setup.${ext}"
     },
     "nsis": {
       "oneClick": false,
       "allowToChangeInstallationDirectory": true,
       "createDesktopShortcut": true,
       "createStartMenuShortcut": true
+    },
+    "mac": {
+      "target": [
+        "dmg"
+      ],
+      "icon": "src/renderer/icon/Callama_icon.png",
+      "category": "public.app-category.productivity",
+      "artifactName": "Callama-${arch}.${ext}"
+    },
+    "linux": {
+      "target": [
+        "AppImage",
+        "deb"
+      ],
+      "icon": "src/renderer/icon/Callama_icon.png",
+      "category": "Utility",
+      "artifactName": "Callama.${ext}"
     }
   },
   "dependencies": {

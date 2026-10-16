@@ -1,0 +1,61 @@
+# Builds Callama installers on each OS (macOS apps can only be built on macOS).
+# Push a version tag (git tag v0.1.0 && git push origin v0.1.0) to build AND publish a GitHub Release
+# with the installers attached. Running it manually from the Actions tab only builds (see Artifacts).
+# The website's download buttons point at releases/latest/download/<file>, so file names must match package.json artifactName.
+name: Build installers
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: --linux
+          - os: windows-latest
+            target: --win
+          - os: macos-latest
+            target: --mac --x64 --arm64 # Intel and Apple Silicon
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci # postinstall rebuilds better-sqlite3 for this OS's Electron
+      - run: npm run build:css
+      - name: Build
+        run: npx electron-builder ${{ matrix.target }} --publish never
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: false # unsigned builds; add signing certificates later if needed
+      - uses: actions/upload-artifact@v4
+        with:
+          name: callama-${{ runner.os }}
+          path: |
+            dist/*.AppImage
+            dist/*.deb
+            dist/*.exe
+            dist/*.dmg
+          if-no-files-found: error
+
+  release:
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*
+          generate_release_notes: true

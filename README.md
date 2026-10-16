@@ -4,6 +4,8 @@
 
 Built with Electron and powered by [Ollama](https://ollama.com).
 
+**Download for Windows, macOS and Linux: [callama.vercel.app](https://callama.vercel.app)**
+
 ---
 
 ## The core idea
@@ -80,7 +82,7 @@ npm start              # launches the app
 
 ## Building for distribution
 
-Currently configured for **Windows** (NSIS installer). Linux packaging is planned but not yet built.
+Configured for **Windows** (NSIS `.exe`), **macOS** (`.dmg`, Intel and Apple Silicon) and **Linux** (`.AppImage`, `.deb`). Release builds for all three run on GitHub Actions (see [Website](#website)); the local command below builds the Windows installer.
 
 ```fish
 npm run build:css
@@ -115,7 +117,20 @@ Callama/
 
 ---
 
+## Website
+
+The download site lives in [`website/`](./website) (plain HTML, no build step) and is deployed on Vercel at **https://callama.vercel.app**. In Vercel, import this repo and set **Root Directory** to `website`. Its download buttons link to the latest GitHub Release, which the `Build installers` workflow publishes when you push a version tag:
+
+```fish
+git tag v0.1.0
+git push origin v0.1.0
+```
+
+---
+
 ## License
+
+Callama is released under the [MIT License](./LICENSE). [Privacy Policy](https://callama.vercel.app/privacy.html) · [Terms of Service](https://callama.vercel.app/terms.html)
 
 JetBrains Mono is bundled under the SIL Open Font License (see `src/renderer/fonts/JetBrainsMono-OFL.txt`).
 

@@ -1,0 +1,256 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Callama — Call an Ollama</title>
+<meta name="description" content="Callama is a free, fully offline AI desktop assistant powered by Ollama. Five subject-scoped memories, no account, no cloud. For Windows, macOS and Linux.">
+<meta property="og:title" content="Callama — Call an Ollama">
+<meta property="og:description" content="A free, fully offline AI assistant for your desktop. Powered by Ollama.">
+<meta property="og:image" content="https://callama.vercel.app/assets/icon.png">
+<link rel="icon" href="assets/icon.png">
+<style>
+  @font-face { font-family: "Mono"; src: url(assets/mono.ttf) format("truetype"); font-weight: 100 800; font-display: swap; }
+  :root { --bg: #0a0b16; --card: #121327; --card2: #181a33; --line: #262a4a; --text: #eceefb; --muted: #9a9fc4; --violet: #8b5cf6; --blue: #3b82f6; --grad: linear-gradient(90deg, var(--violet), var(--blue)); }
+  * { box-sizing: border-box; }
+  html { scroll-behavior: smooth; }
+  body { margin: 0; background: var(--bg); color: var(--text); font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif; line-height: 1.6; overflow-x: hidden; }
+  img { max-width: 100%; height: auto; display: block; }
+  a { color: #a5b4fc; }
+  h1, h2, h3, .mono, nav, .btn, .badge { font-family: "Mono", ui-monospace, monospace; }
+  .wrap { max-width: 1120px; margin: 0 auto; padding: 0 16px; }
+  .grad { background: var(--grad); -webkit-background-clip: text; background-clip: text; color: transparent; }
+
+  /* Ambient glow + faint terminal lines, like the icon's backdrop */
+  body::before { content: ""; position: fixed; inset: 0; z-index: -1; pointer-events: none;
+    background: radial-gradient(600px 400px at 15% 10%, #8b5cf622, transparent 70%), radial-gradient(700px 500px at 90% 30%, #3b82f61c, transparent 70%),
+      repeating-linear-gradient(0deg, transparent 0 31px, #ffffff05 31px 32px); }
+
+  nav { display: flex; align-items: center; justify-content: space-between; padding: 20px 0; }
+  .brand { display: flex; align-items: center; gap: 10px; font-weight: 700; font-size: 1.15rem; color: var(--text); text-decoration: none; }
+  .brand img { width: 34px; border-radius: 8px; }
+  nav .links a { color: var(--muted); text-decoration: none; margin-left: 22px; font-size: .9rem; }
+  nav .links a:hover { color: var(--text); }
+
+  .hero { display: grid; grid-template-columns: 1fr 1.2fr; gap: 56px; align-items: center; padding: 48px 0 88px; }
+  .badge { display: inline-block; font-size: .78rem; color: #c4b5fd; border: 1px solid #8b5cf655; background: #8b5cf614; padding: 5px 12px; border-radius: 99px; }
+  h1 { font-size: clamp(2.6rem, 6vw, 4.2rem); line-height: 1.02; margin: 20px 0 16px; letter-spacing: -.02em; }
+  .lead { color: var(--muted); font-size: 1.15rem; margin: 0 0 30px; max-width: 46ch; }
+  .btn { display: inline-flex; align-items: center; gap: 10px; background: var(--grad); color: #fff; text-decoration: none; font-weight: 700; font-size: 1.05rem; padding: 14px 26px; border-radius: 12px; box-shadow: 0 8px 30px #6d5cf655; transition: transform .15s, box-shadow .15s; }
+  .btn:hover { transform: translateY(-2px); box-shadow: 0 12px 38px #6d5cf688; }
+  .btn:focus-visible { outline: 2px solid #fff; outline-offset: 3px; }
+  .btn[aria-disabled="true"] { background: var(--card2); color: var(--muted); box-shadow: none; pointer-events: none; }
+  .btn svg { width: 20px; height: 20px; }
+  .others { margin: 20px 0 0; color: var(--muted); font-size: .9rem; }
+  .others a { margin-right: 12px; white-space: nowrap; }
+  .note { color: var(--muted); font-size: .82rem; margin-top: 12px; max-width: 50ch; }
+
+  .stage { position: relative; }
+  .stage::before { content: ""; position: absolute; inset: 8% 6%; background: var(--grad); filter: blur(70px); opacity: .35; z-index: -1; }
+  .window { border: 1px solid var(--line); border-radius: 14px; overflow: hidden; background: var(--card); box-shadow: 0 30px 80px #0009; transform: perspective(1400px) rotateY(-6deg) rotateX(2deg); transition: transform .5s; }
+  .window:hover { transform: none; }
+  .stage .llama { position: absolute; width: 96px; right: -20px; bottom: -36px; border-radius: 20px; box-shadow: 0 12px 30px #000a; animation: bob 4s ease-in-out infinite; }
+  @keyframes bob { 50% { transform: translateY(-8px) rotate(-3deg); } }
+
+  section { padding: 80px 0; }
+  h2 { font-size: clamp(1.7rem, 4vw, 2.4rem); text-align: center; margin: 0 0 10px; letter-spacing: -.01em; }
+  .sub { text-align: center; color: var(--muted); margin: 0 auto 48px; max-width: 60ch; }
+
+  /* Subject access matrix */
+  .subjects { display: grid; grid-template-columns: repeat(5, 1fr); gap: 14px; }
+  .subj { font: inherit; color: var(--text); text-align: left; background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 20px 18px; cursor: pointer; transition: border-color .2s, background .2s, transform .2s, opacity .2s; }
+  .subj b { display: block; font-family: "Mono", monospace; font-size: .95rem; margin-bottom: 6px; }
+  .subj span { color: var(--muted); font-size: .85rem; }
+  .subj .dot { width: 10px; height: 10px; border-radius: 50%; background: var(--line); margin-bottom: 14px; transition: background .2s, box-shadow .2s; }
+  .subj:focus-visible { outline: 2px solid var(--violet); outline-offset: 2px; }
+  .subjects.picking .subj { opacity: .4; }
+  .subjects .subj.on { opacity: 1; border-color: var(--violet); background: #8b5cf61a; transform: translateY(-4px); }
+  .subjects .subj.on .dot { background: var(--violet); box-shadow: 0 0 12px var(--violet); }
+  .subjects .subj.reads { opacity: 1; border-color: var(--blue); }
+  .subjects .subj.reads .dot { background: var(--blue); box-shadow: 0 0 12px var(--blue); }
+  .readout { text-align: center; margin-top: 26px; min-height: 1.6em; color: var(--muted); font-family: "Mono", monospace; font-size: .92rem; }
+  .readout strong { color: var(--text); }
+
+  .features { display: grid; grid-template-columns: repeat(3, 1fr); gap: 18px; }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 16px; padding: 26px 24px; transition: border-color .2s, transform .2s; }
+  .card:hover { border-color: #8b5cf688; transform: translateY(-3px); }
+  .card .ic { width: 42px; height: 42px; border-radius: 10px; display: grid; place-items: center; background: #8b5cf61f; color: #c4b5fd; margin-bottom: 16px; }
+  .card .ic svg { width: 22px; height: 22px; }
+  .card h3 { margin: 0 0 8px; font-size: 1.05rem; }
+  .card p { margin: 0; color: var(--muted); font-size: .95rem; }
+
+  .steps { display: grid; grid-template-columns: repeat(3, 1fr); gap: 18px; counter-reset: s; }
+  .step { position: relative; background: var(--card); border: 1px solid var(--line); border-radius: 16px; padding: 30px 24px 24px; }
+  .step::before { counter-increment: s; content: "0" counter(s); font-family: "Mono", monospace; font-weight: 700; font-size: 2rem; display: block; margin-bottom: 8px; background: var(--grad); -webkit-background-clip: text; background-clip: text; color: transparent; }
+  .step h3 { margin: 0 0 6px; font-size: 1.05rem; } .step p { margin: 0; color: var(--muted); font-size: .95rem; }
+  .step code { font-size: .85em; background: #0006; padding: 1px 6px; border-radius: 5px; }
+
+  .pills { display: flex; flex-wrap: wrap; justify-content: center; gap: 10px; margin-top: 44px; }
+  .pills span { font-family: "Mono", monospace; font-size: .82rem; color: var(--muted); border: 1px solid var(--line); border-radius: 99px; padding: 6px 14px; }
+
+  .support { display: grid; grid-template-columns: 1fr 230px; gap: 40px; align-items: center; max-width: 820px; margin: 0 auto; padding: 36px; background: var(--card); border: 1px solid var(--line); border-radius: 20px; position: relative; overflow: hidden; }
+  .support::after { content: ""; position: absolute; inset: 0 0 auto; height: 3px; background: var(--grad); }
+  .support h2 { text-align: left; }
+  .support p { color: var(--muted); margin: 0 0 10px; }
+  .support img { width: 230px; height: auto; border-radius: 16px; background: #fff; }
+
+  .cta { text-align: center; }
+  .cta img { width: 88px; margin: 0 auto 18px; border-radius: 20px; }
+  .cta h2 { margin-bottom: 22px; }
+
+  footer { margin-top: 40px; padding: 30px 0; border-top: 1px solid var(--line); text-align: center; color: var(--muted); font-size: .9rem; }
+  footer p { margin: 6px 0; }
+
+  .reveal { opacity: 0; transform: translateY(20px); transition: opacity .6s, transform .6s; }
+  .reveal.in { opacity: 1; transform: none; }
+
+  @media (max-width: 900px) {
+    .hero { grid-template-columns: 1fr; gap: 56px; padding-top: 24px; text-align: center; }
+    .lead, .note { margin-left: auto; margin-right: auto; }
+    .window { transform: none; }
+    .stage .llama { width: 68px; right: -4px; bottom: -26px; }
+    nav .links a:not(.gh) { display: none; }
+    .subjects { grid-template-columns: 1fr 1fr; } .subjects .subj:first-child { grid-column: 1 / -1; }
+    .features, .steps { grid-template-columns: 1fr; }
+    .support { grid-template-columns: 1fr; text-align: center; justify-items: center; padding: 28px 20px; }
+    .support h2 { text-align: center; }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after { animation: none !important; transition: none !important; }
+    .reveal { opacity: 1; transform: none; }
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <nav>
+    <a class="brand" href="#"><img src="assets/icon.png" alt="">Callama</a>
+    <div class="links"><a href="#subjects">Subjects</a><a href="#features">Features</a><a href="#setup">Setup</a><a href="#support">Support</a><a class="gh" href="https://github.com/GigaNuke3/Callama">GitHub</a></div>
+  </nav>
+
+  <header class="hero">
+    <div>
+      <span class="badge">Free · Offline · Windows · macOS · Linux</span>
+      <h1>Call an <span class="grad">Ollama.</span></h1>
+      <p class="lead">A private AI assistant that lives on your computer. No account, no cloud, no data leaving your machine. It just talks to the model running next to it.</p>
+      <a class="btn dl-auto" href="https://github.com/GigaNuke3/Callama/releases/latest">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3v12m0 0-5-5m5 5 5-5M4 21h16"/></svg><span>Download Callama</span></a>
+      <p class="others">
+        <a href="https://github.com/GigaNuke3/Callama/releases/latest/download/Callama-Setup.exe">Windows</a>
+        <a href="https://github.com/GigaNuke3/Callama/releases/latest/download/Callama-arm64.dmg">macOS Apple Silicon</a>
+        <a href="https://github.com/GigaNuke3/Callama/releases/latest/download/Callama-x64.dmg">macOS Intel</a>
+        <a href="https://github.com/GigaNuke3/Callama/releases/latest/download/Callama.AppImage">Linux AppImage</a>
+        <a href="https://github.com/GigaNuke3/Callama/releases/latest/download/Callama.deb">.deb</a>
+        <a href="https://github.com/GigaNuke3/Callama/releases">All releases</a>
+      </p>
+      <p class="note" id="note"></p>
+    </div>
+    <div class="stage">
+      <div class="window">
+        <img src="assets/app.jpg" alt="The Callama app: a chat sidebar on the left and a conversation on the right" width="968" height="700">
+      </div>
+      <img class="llama" src="assets/icon.png" alt="">
+    </div>
+  </header>
+</div>
+
+<main class="wrap">
+  <section id="subjects">
+    <h2 class="reveal">Five subjects. Memory that knows its place.</h2>
+    <p class="sub reveal">Every chat belongs to a subject, and each subject has its own memory. A deliberate access matrix decides what each one can see. Pick one:</p>
+    <div class="subjects reveal" id="subjects-grid">
+      <button class="subj" data-s="predictability"><i class="dot"></i><b>Predictability</b><span>Day-to-day questions. The general one.</span></button>
+      <button class="subj" data-s="health"><i class="dot"></i><b>Health</b><span>Physical and medical questions.</span></button>
+      <button class="subj" data-s="wellbeing"><i class="dot"></i><b>WellBeing</b><span>Mental and spiritual health.</span></button>
+      <button class="subj" data-s="education"><i class="dot"></i><b>Education</b><span>Writing, learning, curiosity.</span></button>
+      <button class="subj" data-s="logicalthinking"><i class="dot"></i><b>LogicalThinking</b><span>Code, math, engineering.</span></button>
+    </div>
+    <p class="readout" id="readout" aria-live="polite">Select a subject to see what it can read.</p>
+  </section>
+
+  <section id="features">
+    <h2 class="reveal">Everything a chat app should do</h2>
+    <p class="sub reveal">Plus a few things the big ones don't, because it's all running on your machine.</p>
+    <div class="features">
+      <div class="card reveal"><div class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3a6 6 0 0 0-6 6c0 2.4 1.3 3.8 2.3 5 .6.7.7 1.3.7 2h6c0-.7.1-1.3.7-2 1-1.2 2.3-2.6 2.3-5a6 6 0 0 0-6-6zM9 20h6"/></svg></div><h3>Memory that's actually useful</h3><p>Tap "remember" on any message. Callama recalls it later by meaning, using local embeddings, so it can bring back something from weeks ago when it's relevant.</p></div>
+      <div class="card reveal"><div class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="8" r="4"/><path d="M4 21c1.5-4 4.5-6 8-6s6.5 2 8 6"/></svg></div><h3>It knows who you are</h3><p>Write a short bio once. It goes into every chat in every subject, so you never have to introduce yourself again.</p></div>
+      <div class="card reveal"><div class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><path d="m20 20-4-4"/></svg></div><h3>Search everything</h3><p>Search finds chats by title and by what was said in them. Pin, rename and delete chats from the sidebar.</p></div>
+      <div class="card reveal"><div class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 20h4L19 9l-4-4L4 16v4zM13 7l4 4"/></svg></div><h3>Edit, regenerate, stop</h3><p>Edit any earlier message and continue from there, regenerate the last reply, or stop a reply halfway and keep what was written.</p></div>
+      <div class="card reveal"><div class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="6" rx="2"/><rect x="3" y="14" width="18" height="6" rx="2"/><path d="M7 7h.01M7 17h.01"/></svg></div><h3>Manage your models</h3><p>Download Ollama models with a live progress bar, remove them with a two-step confirmation, and pick a different model for each chat.</p></div>
+      <div class="card reveal"><div class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v3M12 18v3M3 12h3M18 12h3M5.6 5.6l2.1 2.1M16.3 16.3l2.1 2.1M5.6 18.4l2.1-2.1M16.3 7.7l2.1-2.1"/></svg></div><h3>Sets itself up</h3><p>On Windows and Linux, if Ollama isn't installed, Callama installs it using Ollama's official installer and downloads the model that memory search needs.</p></div>
+    </div>
+    <div class="pills reveal">
+      <span>100% local</span><span>No telemetry</span><span>SQLite on your disk</span><span>Context-usage meter</span><span>Markdown replies</span>
+    </div>
+  </section>
+
+  <section id="setup">
+    <h2 class="reveal">Up and running in three steps</h2>
+    <p class="sub reveal">No sign-up. No API key. Your first reply comes from your own hardware.</p>
+    <div class="steps">
+      <div class="step reveal"><h3>Download</h3><p>Get the installer for your system from the button above.</p></div>
+      <div class="step reveal"><h3>Open Callama</h3><p>It checks for <a href="https://ollama.com">Ollama</a> and installs it if needed. On a Mac, install Ollama from ollama.com first.</p></div>
+      <div class="step reveal"><h3>Pull a model &amp; chat</h3><p>Paste a model name such as <code>llama3.2:3b</code>, press pull, and start talking.</p></div>
+    </div>
+  </section>
+
+  <section id="support">
+    <div class="support reveal">
+      <div>
+        <h2>Support Callama</h2>
+        <p>Callama is free and open source, and it will stay that way. If it's useful to you, a small tip on PayPal helps keep the updates coming.</p>
+        <p class="others">Scan with your phone's camera or the PayPal app.</p>
+      </div>
+      <img src="assets/paypal-qr.jpg" alt="PayPal QR code for donating to Callama" width="872" height="923" loading="lazy">
+    </div>
+  </section>
+
+  <section class="cta reveal">
+    <img src="assets/icon.png" alt="">
+    <h2>Your assistant, on your machine.</h2>
+    <a class="btn dl-auto" href="https://github.com/GigaNuke3/Callama/releases/latest">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3v12m0 0-5-5m5 5 5-5M4 21h16"/></svg><span>Download Callama</span></a>
+    <p class="others">Free forever · <a href="https://github.com/GigaNuke3/Callama">Open source on GitHub</a></p>
+  </section>
+</main>
+
+<footer class="wrap">
+  <p class="mono">Callama. Call an Ollama.</p>
+  <p><a href="privacy.html">Privacy Policy</a> · <a href="terms.html">Terms of Service</a> · <a href="https://github.com/GigaNuke3/Callama/blob/main/LICENSE">MIT License</a> · <a href="mailto:gorospeedilcon@gmail.com">Contact</a></p>
+</footer>
+
+<script>
+  // OS-detected download buttons
+  const base = "https://github.com/GigaNuke3/Callama/releases/latest/download/";
+  const ua = navigator.userAgent.toLowerCase();
+  let file, label, msg = "", off = false;
+  if (/android|iphone|ipad/.test(ua)) { label = "Callama is a desktop app"; off = true; msg = "Open this page on Windows, macOS or Linux to download."; }
+  else if (ua.includes("win")) { file = "Callama-Setup.exe"; label = "Download for Windows"; msg = "Windows may show a SmartScreen warning because the app isn't code-signed. Click “More info”, then “Run anyway”."; }
+  // ponytail: browsers don't expose Mac CPU type; default to Apple Silicon, Intel link sits below
+  else if (ua.includes("mac")) { file = "Callama-arm64.dmg"; label = "Download for Mac"; msg = "Intel Mac? Use the “macOS Intel” link. Install Ollama from ollama.com first. On first launch, go to System Settings → Privacy & Security and click “Open Anyway” (the app isn't code-signed)."; }
+  else if (ua.includes("linux")) { file = "Callama.AppImage"; label = "Download for Linux"; msg = "Make it executable with chmod +x Callama.AppImage, then run it. Prefer a package? Use the .deb link."; }
+  if (label) document.querySelectorAll(".dl-auto").forEach(a => {
+    a.querySelector("span").textContent = label;
+    if (file) a.href = base + file;
+    if (off) a.setAttribute("aria-disabled", "true");
+  });
+  document.getElementById("note").textContent = msg;
+
+  // Access matrix, same rules as src/db.js
+  const reads = { predictability: ["health", "education", "wellbeing", "logicalthinking"], health: ["wellbeing"], wellbeing: ["health"], education: ["logicalthinking"], logicalthinking: ["education"] };
+  const grid = document.getElementById("subjects-grid"), out = document.getElementById("readout");
+  const name = s => grid.querySelector(`[data-s="${s}"] b`).textContent;
+  grid.addEventListener("click", e => {
+    const btn = e.target.closest(".subj"); if (!btn) return;
+    const s = btn.dataset.s;
+    grid.classList.add("picking");
+    grid.querySelectorAll(".subj").forEach(b => { b.classList.toggle("on", b === btn); b.classList.toggle("reads", reads[s].includes(b.dataset.s)); b.setAttribute("aria-pressed", b === btn); });
+    out.innerHTML = `<strong>${name(s)}</strong> can also read: ${reads[s].map(name).join(", ")}`;
+  });
+
+  // Scroll reveal
+  const io = new IntersectionObserver(es => es.forEach(e => { if (e.isIntersecting) { e.target.classList.add("in"); io.unobserve(e.target); } }), { threshold: .15 });
+  document.querySelectorAll(".reveal").forEach(el => io.observe(el));
+</script>
+</body>
+</html>
